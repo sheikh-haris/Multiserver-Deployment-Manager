@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/IisControlCenter.Agent.Iis/IisControlCenter.Agent.Iis.csproj" />
+    <Project Path="src/IisControlCenter.Agent/IisControlCenter.Agent.csproj" />
+    <Project Path="src/IisControlCenter.Contracts/IisControlCenter.Contracts.csproj" />
+    <Project Path="src/IisControlCenter.Core/IisControlCenter.Core.csproj" />
+    <Project Path="src/IisControlCenter.Data/IisControlCenter.Data.csproj" />
+    <Project Path="src/IisControlCenter.Web/IisControlCenter.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/IisControlCenter.Agent.IntegrationTests/IisControlCenter.Agent.IntegrationTests.csproj" />
+    <Project Path="tests/IisControlCenter.Agent.Tests/IisControlCenter.Agent.Tests.csproj" />
+    <Project Path="tests/IisControlCenter.Core.Tests/IisControlCenter.Core.Tests.csproj" />
+    <Project Path="tests/IisControlCenter.Web.Tests/IisControlCenter.Web.Tests.csproj" />
+  </Folder>
+</Solution>

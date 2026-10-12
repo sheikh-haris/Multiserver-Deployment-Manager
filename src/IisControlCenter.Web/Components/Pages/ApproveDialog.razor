@@ -1,0 +1,24 @@
+<MudDialog>
+    <DialogContent>
+        <MudText Class="mb-3">
+            The agent on this server was installed for <b>@Declared</b>. That setting is stored on the server and cannot be changed here.
+            Confirm that this is correct.
+        </MudText>
+        <MudSelect T="string" @bind-Value="_env" Label="Environment">
+            <MudSelectItem T="string" Value="@("Dev")">Dev</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Staging")">Staging</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Prod")">Prod</MudSelectItem>
+        </MudSelect>
+        <MudText Typo="Typo.caption">New servers always start in ReadOnly mode.</MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled" OnClick="() => Dialog.Close(DialogResult.Ok(_env))">Approve</MudButton>
+    </DialogActions>
+</MudDialog>
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public string? Declared { get; set; }
+    private string _env = "";
+    protected override void OnInitialized() => _env = Declared ?? "";
+}

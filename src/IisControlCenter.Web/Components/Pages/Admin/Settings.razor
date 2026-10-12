@@ -1,0 +1,17 @@
+@page "/admin/settings"
+@attribute [Authorize(Policy = "perm:ManageSettings")]
+@inject IConfiguration Config
+<PageTitle>Settings</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-2">Settings</MudText>
+<MudAlert Severity="Severity.Info" Class="mb-4">Phase 1 shows the values in use. Editing, naming conventions, protected-path defaults and retention come in later phases.</MudAlert>
+<MudSimpleTable Dense="true">
+    <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+    <tbody>
+        <tr><td>Registration token lifetime</td><td>@ServerService.DefaultTokenMinutes minutes</td></tr>
+        <tr><td>Agent marked offline after</td><td>@AgentMonitor.OfflineAfter.TotalSeconds seconds without heartbeat</td></tr>
+        <tr><td>Scheduled discovery</td><td>Every 6 hours (Hangfire job "discovery-all")</td></tr>
+        <tr><td>Certificate warning window</td><td>30 days</td></tr>
+        <tr><td>Agents host name</td><td>@(Config["Portal:AgentsHost"] ?? "(not set)")</td></tr>
+        <tr><td>Sign-in mode</td><td>@Config["Auth:Mode"]</td></tr>
+    </tbody>
+</MudSimpleTable>

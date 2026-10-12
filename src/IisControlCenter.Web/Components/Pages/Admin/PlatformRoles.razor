@@ -1,0 +1,94 @@
+@page "/admin/roles"
+@attribute [Authorize(Policy = "perm:ManageRoles")]
+@inject ActorProvider Actors
+@inject RoleService Roles
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+<PageTitle>Platform roles</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-2">Platform roles</MudText>
+<MudText Typo="Typo.body2" Class="mb-4">
+    Platform roles control servers and IIS. Project roles (Viewer, Deployer, Approver, Owner) arrive in Phase 2 and are separate.
+    Prefer groups. Individual users need an expiry date.
+</MudText>
+
+<MudPaper Class="pa-4 mb-4">
+    <MudText Typo="Typo.h6" Class="mb-2">Add assignment</MudText>
+    <MudGrid>
+        <MudItem xs="12" md="2">
+            <MudSelect T="PrincipalType" @bind-Value="_type" Label="Type"><MudSelectItem Value="PrincipalType.Group">Group</MudSelectItem><MudSelectItem Value="PrincipalType.User">User</MudSelectItem></MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="3"><MudTextField @bind-Value="_id" Label="Object id (Entra)" Immediate="true" /></MudItem>
+        <MudItem xs="12" md="2"><MudTextField @bind-Value="_name" Label="Display name" /></MudItem>
+        <MudItem xs="12" md="2">
+            <MudSelect T="Role" @bind-Value="_role" Label="Role">
+                @foreach (var r in RolePermissions.PlatformRoles) { <MudSelectItem Value="r">@r</MudSelectItem> }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="2">
+            <MudSelect T="string" @bind-Value="_env" Label="Environment" Disabled="@(!RolePermissions.IsEnvironmentScoped(_role))" HelperText="@(RolePermissions.IsEnvironmentScoped(_role) ? "" : "Applies everywhere")">
+                <MudSelectItem Value="@("Dev")">Dev</MudSelectItem><MudSelectItem Value="@("Staging")">Staging</MudSelectItem><MudSelectItem Value="@("Prod")">Prod</MudSelectItem>
+                <MudSelectItem Value="@RoleService.AllEnvironments">All environments</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="3"><MudDatePicker Label="Expires" @bind-Date="_expires" MinDate="DateTime.Today.AddDays(1)" Clearable="true" /></MudItem>
+        <MudItem xs="12" md="2" Class="d-flex align-center"><MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Add">Grant</MudButton></MudItem>
+    </MudGrid>
+    @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mt-2">@_error</MudAlert> }
+</MudPaper>
+
+<MudSimpleTable Dense="true" Hover="true">
+    <thead><tr><th>Who</th><th>Type</th><th>Role</th><th>Environment</th><th>Expires</th><th>Granted by</th><th></th></tr></thead>
+    <tbody>
+    @foreach (var a in _items)
+    {
+        <tr>
+            <td>@a.PrincipalName <span class="mono">(@a.PrincipalId)</span></td>
+            <td>@a.PrincipalType</td><td>@a.Role</td>
+            <td>@(RolePermissions.IsEnvironmentScoped(a.Role) ? (a.EnvironmentName ?? "All") : "-")</td>
+            <td>@(a.ExpiresAt?.ToLocalTime().ToString("d") ?? "never")</td>
+            <td>@a.GrantedBy</td>
+            <td><MudButton Size="Size.Small" Color="Color.Error" OnClick="() => Revoke(a)">Revoke</MudButton></td>
+        </tr>
+    }
+    </tbody>
+</MudSimpleTable>
+
+@code {
+    private List<RoleAssignment> _items = [];
+    private PrincipalType _type = PrincipalType.Group;
+    private string _id = "", _name = "";
+    private Role _role = Role.Auditor;
+    private string? _env = "Dev";
+    private DateTime? _expires;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync() => await Load();
+    private async Task Load() => _items = await Roles.ListPlatformAsync(await Actors.GetAsync());
+
+    private async Task Add()
+    {
+        _error = null;
+        DateTimeOffset? exp = _expires is null ? null : new DateTimeOffset(_expires.Value.Date.AddDays(1).AddSeconds(-1), TimeZoneInfo.Local.GetUtcOffset(_expires.Value));
+        try
+        {
+            var r = await Roles.GrantAsync(await Actors.GetAsync(), _type, _id, _name, _role, _env, exp);
+            if (r.Ok) { _id = _name = ""; await Load(); Snackbar.Add("Role granted.", Severity.Success); } else _error = r.Error;
+        }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+    }
+
+    private async Task Revoke(RoleAssignment a)
+    {
+        var dlg = await Dialogs.ShowAsync<ConfirmDangerDialog>("Revoke role", new DialogParameters<ConfirmDangerDialog>
+        {
+            { x => x.Message, $"Remove {a.Role} from {a.PrincipalName}?" }, { x => x.ConfirmText, a.PrincipalName }, { x => x.ButtonText, "Revoke" },
+        }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        if ((await dlg.Result) is { Canceled: false })
+        {
+            var r = await Roles.RevokeAsync(await Actors.GetAsync(), a.Id);
+            Snackbar.Add(r.Ok ? "Role revoked." : r.Error ?? "Failed", r.Ok ? Severity.Success : Severity.Error);
+            await Load();
+        }
+    }
+}

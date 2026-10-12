@@ -1,0 +1,245 @@
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+using System.Threading.RateLimiting;
+using Hangfire;
+using IisControlCenter.Contracts;
+using IisControlCenter.Core.Domain;
+using IisControlCenter.Core.Security;
+using IisControlCenter.Data;
+using IisControlCenter.Web.Agents;
+using IisControlCenter.Web.Auth;
+using IisControlCenter.Web.Components;
+using IisControlCenter.Web.Services;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.EntityFrameworkCore;
+using MudBlazor.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseWindowsService();
+var isDev = builder.Environment.IsDevelopment();
+
+// ---------- configuration checks (fail closed) ----------
+var authMode = builder.Configuration["Auth:Mode"] ?? "";
+if (!isDev && authMode != "Entra")
+    throw new InvalidOperationException("Auth:Mode must be 'Entra' outside Development.");
+if (authMode == "Dev" && !isDev)
+    throw new InvalidOperationException("Dev sign-in is only allowed in the Development environment.");
+if (authMode is not ("Entra" or "Dev"))
+    throw new InvalidOperationException("Set Auth:Mode to 'Entra' (or 'Dev' in Development).");
+var agentsHost = builder.Configuration["Portal:AgentsHost"];
+if (!isDev && string.IsNullOrWhiteSpace(agentsHost))
+    throw new InvalidOperationException("Portal:AgentsHost is required outside Development.");
+
+TlsSetup.Configure(builder);
+
+// ---------- services ----------
+builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+builder.Services.AddCascadingAuthenticationState();
+builder.Services.AddMudServices();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton(TimeProvider.System);
+
+var provider = builder.Configuration["Database:Provider"] ?? "SqlServer";
+if (provider == "Sqlite" && !isDev) throw new InvalidOperationException("SQLite is for Development only.");
+var conn = builder.Configuration.GetConnectionString("Default") ?? throw new InvalidOperationException("ConnectionStrings:Default is missing.");
+builder.Services.AddDbContextFactory<AppDbContext>(o =>
+{
+    if (provider == "Sqlite") o.UseSqlite(conn); else o.UseSqlServer(conn);
+});
+
+builder.Services.Configure<PortalAuthOptions>(builder.Configuration.GetSection(PortalAuthOptions.Section));
+
+var auth = builder.Services.AddAuthentication(o =>
+{
+    o.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+    o.DefaultChallengeScheme = authMode == "Entra" ? OpenIdConnectDefaults.AuthenticationScheme : CookieAuthenticationDefaults.AuthenticationScheme;
+})
+.AddCookie(o =>
+{
+    o.Cookie.HttpOnly = true;
+    o.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    o.Cookie.SameSite = SameSiteMode.Lax;
+    o.LoginPath = "/login";
+    o.AccessDeniedPath = "/access-denied";
+    o.ExpireTimeSpan = TimeSpan.FromHours(8);
+    o.SlidingExpiration = false;
+})
+.AddScheme<AuthenticationSchemeOptions, AgentCertAuthHandler>(AgentCertAuth.Scheme, _ => { });
+
+if (authMode == "Entra")
+{
+    var ad = builder.Configuration.GetSection("AzureAd");
+    auth.AddOpenIdConnect(OpenIdConnectDefaults.AuthenticationScheme, o =>
+    {
+        o.Authority = $"https://login.microsoftonline.com/{ad["TenantId"]}/v2.0";
+        o.ClientId = ad["ClientId"];
+        o.ClientSecret = ad["ClientSecret"];   // supply from Key Vault / DPAPI-protected source, not appsettings.json
+        o.ResponseType = "code";
+        o.UsePkce = true;
+        o.SaveTokens = false;
+        o.MapInboundClaims = false;            // keep short claim names: oid, name, groups
+        o.Scope.Clear(); o.Scope.Add("openid"); o.Scope.Add("profile");
+        o.TokenValidationParameters.NameClaimType = "name";
+        o.CallbackPath = "/signin-oidc";
+    });
+}
+
+builder.Services.AddAuthorization(o =>
+{
+    o.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
+    foreach (var p in Enum.GetValues<Permission>())
+        o.AddPolicy(Policies.For(p), pb => pb.RequireAuthenticatedUser().AddRequirements(new PermissionRequirement(p)));
+});
+builder.Services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, PermissionHandler>();
+builder.Services.AddSingleton<AccessService>();
+builder.Services.AddScoped<ActorProvider>();
+
+builder.Services.AddSingleton<AgentConnectionTracker>();
+builder.Services.AddSingleton<ServerEventBus>();
+builder.Services.AddSingleton<AuditService>();
+builder.Services.AddScoped<AgentCommandService>();
+builder.Services.AddScoped<ServerService>();
+builder.Services.AddScoped<ServerQueries>();
+builder.Services.AddScoped<RoleService>();
+builder.Services.AddScoped<AuditQueries>();
+builder.Services.AddScoped<DiscoveryJob>();
+builder.Services.AddHostedService<AgentMonitor>();
+
+builder.Services.AddSignalR(o =>
+{
+    o.MaximumReceiveMessageSize = 4 * 1024 * 1024;     // discovery payloads
+    o.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    o.ClientTimeoutInterval = TimeSpan.FromSeconds(60);
+});
+
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.AddPolicy("register", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1) }));
+});
+
+var hangfireOn = builder.Configuration.GetValue("Hangfire:Enabled", true);
+if (hangfireOn)
+{
+    builder.Services.AddHangfire(c => c.UseSqlServerStorage(conn));
+    builder.Services.AddHangfireServer();
+}
+
+var app = builder.Build();
+
+// ---------- database ----------
+if (builder.Configuration.GetValue("Database:MigrateOnStartup", false))
+{
+    var dbf = app.Services.GetRequiredService<IDbContextFactory<AppDbContext>>();
+    await using var db = await dbf.CreateDbContextAsync();
+    if (provider == "Sqlite") await db.Database.EnsureCreatedAsync(); else await db.Database.MigrateAsync();
+    if (authMode == "Dev") await DevSeed.RunAsync(db);
+}
+
+// ---------- pipeline ----------
+if (!isDev)
+{
+    app.UseExceptionHandler("/Error", createScopeForErrors: true);
+    app.UseHsts();
+}
+
+// Host separation (D2): the agents name serves only agent endpoints, the UI name never serves them.
+if (!string.IsNullOrWhiteSpace(agentsHost))
+{
+    app.Use(async (ctx, next) =>
+    {
+        var onAgents = string.Equals(ctx.Request.Host.Host, agentsHost, StringComparison.OrdinalIgnoreCase);
+        var agentPath = ctx.Request.Path.StartsWithSegments(ContractInfo.Routes.AgentHub)
+                        || ctx.Request.Path.StartsWithSegments("/api/agent");
+        if (onAgents != agentPath) { ctx.Response.StatusCode = StatusCodes.Status404NotFound; return; }
+        await next();
+    });
+}
+
+app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+app.UseHttpsRedirection();
+app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseAntiforgery();
+
+app.MapStaticAssets().AllowAnonymous();   // css and js must load before sign-in
+app.MapGet("/healthz", () => Results.Text("ok")).AllowAnonymous();
+
+// ---------- agent endpoints ----------
+app.MapPost(ContractInfo.Routes.Register, async (RegisterRequest req, ServerService svc, HttpContext ctx) =>
+{
+    var presented = ctx.Connection.ClientCertificate is { } c ? ServerService.Thumbprint(c) : null;
+    var r = await svc.RegisterAgentAsync(req, ctx.Connection.RemoteIpAddress?.ToString(), presented);
+    return r.Ok ? Results.Ok(r.Value) : Results.BadRequest(new { error = r.Error });
+}).AllowAnonymous().RequireRateLimiting("register").DisableAntiforgery().WithMetadata(new RequestSizeLimitAttribute(64 * 1024));
+
+app.MapHub<AgentHub>(ContractInfo.Routes.AgentHub);   // [Authorize(AgentCert)] is on the hub. No AllowAnonymous here: it would override it.
+
+// ---------- sign-in / sign-out ----------
+app.MapGet("/login", (string? returnUrl, HttpContext ctx) =>
+{
+    var target = IsLocal(returnUrl) ? returnUrl! : "/";
+    if (authMode == "Entra")
+        return Results.Challenge(new AuthenticationProperties { RedirectUri = target }, [OpenIdConnectDefaults.AuthenticationScheme]);
+    return Results.Redirect("/dev-login?returnUrl=" + Uri.EscapeDataString(target));
+}).AllowAnonymous();
+
+app.MapGet("/auth/logout", async (HttpContext ctx) =>
+{
+    await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Redirect("/signed-out");
+}).AllowAnonymous();
+
+if (authMode == "Dev")
+{
+    app.MapGet("/dev-login/{persona}", async (string persona, string? returnUrl, HttpContext ctx) =>
+    {
+        var p = DevSeed.Personas.FirstOrDefault(x => x.Key == persona);
+        if (p.Key is null) return Results.NotFound();
+        var id = new ClaimsIdentity(
+        [
+            new Claim("oid", p.Oid), new Claim("name", p.Name), new Claim("preferred_username", p.Key),
+        ], CookieAuthenticationDefaults.AuthenticationScheme, "name", ClaimTypes.Role);
+        await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(id));
+        return Results.Redirect(IsLocal(returnUrl) ? returnUrl! : "/");
+    }).AllowAnonymous();
+}
+
+// ---------- exports ----------
+app.MapGet("/export/audit.csv", async (string? search, string? action, string? result, HttpContext ctx,
+    AccessService access, AuditQueries queries, TimeProvider clock) =>
+{
+    var evaluator = await access.GetEvaluatorAsync(ctx.User);
+    var u = UserClaims.ToContext(ctx.User);
+    var actor = new Actor(u.UserId, u.DisplayName, ctx.Connection.RemoteIpAddress?.ToString(), evaluator);
+    try
+    {
+        var csv = await queries.ExportCsvAsync(actor, new AuditFilter(search, action, result, null, null));
+        return Results.File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv", $"audit-{clock.GetUtcNow():yyyyMMdd-HHmm}.csv");
+    }
+    catch (ForbiddenException) { return Results.Forbid(); }
+}).RequireAuthorization(Policies.For(Permission.ViewAudit));
+
+// ---------- jobs ----------
+if (hangfireOn)
+{
+    app.MapHangfireDashboard("/hangfire", new DashboardOptions { Authorization = [] })
+        .RequireAuthorization(Policies.For(Permission.ManageSettings));
+    RecurringJob.AddOrUpdate<DiscoveryJob>("discovery-all", j => j.RunAll(), "0 */6 * * *");
+}
+
+// Component endpoints (including /_blazor) must be reachable before sign-in; every routable page carries [Authorize] or [AllowAnonymous]
+// (a unit test enforces this), and AuthorizeRouteView applies it.
+app.MapRazorComponents<App>().AddInteractiveServerRenderMode().AllowAnonymous();
+app.Run();
+
+static bool IsLocal(string? url) => !string.IsNullOrEmpty(url) && url[0] == '/' && (url.Length == 1 || (url[1] != '/' && url[1] != '\\'));
+
+public partial class Program;

@@ -1,0 +1,18 @@
+@page "/dev-login"
+@attribute [AllowAnonymous]
+@inject NavigationManager Nav
+@inject IWebHostEnvironment Env
+<PageTitle>Dev sign-in</PageTitle>
+@if (Env.IsDevelopment())
+{
+    <MudPaper Class="pa-6 mt-6">
+        <MudAlert Severity="Severity.Warning" Class="mb-4">Development sign-in. This page does not exist in production.</MudAlert>
+        @foreach (var p in DevSeed.Personas)
+        {
+            <MudButton Class="mr-2 mb-2" Variant="Variant.Outlined" OnClick="@(() => Nav.NavigateTo($"/dev-login/{p.Key}?returnUrl={Uri.EscapeDataString(ReturnUrl ?? "/")}", forceLoad: true))">@p.Name</MudButton>
+        }
+    </MudPaper>
+}
+@code {
+    [SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
+}

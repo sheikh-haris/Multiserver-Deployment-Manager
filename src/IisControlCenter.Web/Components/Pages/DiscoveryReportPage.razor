@@ -1,0 +1,65 @@
+@page "/reports/discovery"
+@attribute [Authorize(Policy = "perm:ViewDiscoveryReport")]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject ServerQueries Queries
+@inject ServerEventBus Bus
+<PageTitle>Discovery report</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">Discovery report</MudText>
+
+@if (_report is null) { <MudProgressLinear Indeterminate="true" /> }
+else
+{
+    <MudGrid>
+        <MudItem xs="12" lg="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6">Unassigned sites (@_report.UnassignedSites.Count)</MudText>
+                <MudText Typo="Typo.caption" Class="d-block mb-2">Sites found in IIS that are not yet linked to a project. Mapping arrives in Phase 2.</MudText>
+                <MudSimpleTable Dense="true" Hover="true" Style="max-height:360px;overflow:auto">
+                    <thead><tr><th>Server</th><th>Site</th><th>Path</th><th>App pool</th></tr></thead>
+                    <tbody>@foreach (var s in _report.UnassignedSites) { <tr><td>@Name(s.ServerId)</td><td>@s.Name</td><td class="mono">@s.PhysicalPath</td><td>@s.AppPoolName</td></tr> }</tbody>
+                </MudSimpleTable>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" lg="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6">App pools shared by several applications (@_report.SharedPools.Count)</MudText>
+                <MudText Typo="Typo.caption" Class="d-block mb-2">These need an admin exception before they can be linked (decision D10).</MudText>
+                <MudSimpleTable Dense="true" Hover="true" Style="max-height:360px;overflow:auto">
+                    <thead><tr><th>Server</th><th>App pool</th><th>Used by</th></tr></thead>
+                    <tbody>@foreach (var p in _report.SharedPools) { <tr><td>@Name(p.ServerId)</td><td>@p.PoolName</td><td>@string.Join(", ", p.UsedBy)</td></tr> }</tbody>
+                </MudSimpleTable>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" lg="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6">App pools running as LocalSystem (@_report.LocalSystemPools.Count)</MudText>
+                <MudSimpleTable Dense="true" Hover="true" Style="max-height:360px;overflow:auto">
+                    <thead><tr><th>Server</th><th>App pool</th></tr></thead>
+                    <tbody>@foreach (var p in _report.LocalSystemPools) { <tr><td>@Name(p.ServerId)</td><td>@p.Name</td></tr> }</tbody>
+                </MudSimpleTable>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" lg="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6">Certificates expiring within 30 days (@_report.ExpiringCertificates.Count)</MudText>
+                <MudSimpleTable Dense="true" Hover="true" Style="max-height:360px;overflow:auto">
+                    <thead><tr><th>Server</th><th>Subject</th><th>Expires</th><th>Days</th></tr></thead>
+                    <tbody>@foreach (var c in _report.ExpiringCertificates) { <tr><td>@Name(c.ServerId)</td><td>@c.Subject</td><td>@c.NotAfter.ToLocalTime().ToString("d")</td><td>@(c.DaysLeft < 0 ? "expired" : c.DaysLeft.ToString())</td></tr> }</tbody>
+                </MudSimpleTable>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private Core.Discovery.DiscoveryReport? _report;
+    private IReadOnlyDictionary<Guid, string> _names = new Dictionary<Guid, string>();
+
+    protected override async Task OnInitializedAsync() { Bus.Changed += OnChanged; await Load(); }
+    private async Task Load() { (_report, _names) = await Queries.GetReportAsync(await Actors.GetAsync()); }
+    private string Name(Guid id) => _names.TryGetValue(id, out var n) ? n : id.ToString();
+    private void OnChanged(ServerChanged e) { if (e.Kind == ServerChangeKind.Discovery) _ = InvokeAsync(async () => { await Load(); StateHasChanged(); }); }
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

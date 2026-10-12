@@ -1,0 +1,87 @@
+@page "/"
+@attribute [Authorize]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject ServerQueries Queries
+@inject ServerEventBus Bus
+<PageTitle>Dashboard</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-4">Dashboard</MudText>
+
+@if (_error is not null)
+{
+    <MudAlert Severity="Severity.Info">@_error</MudAlert>
+}
+else if (_data is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else
+{
+    <MudGrid>
+        <MudItem xs="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.overline">Servers</MudText><MudText Typo="Typo.h4">@_data.Total</MudText></MudPaper></MudItem>
+        <MudItem xs="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.overline">Online</MudText><MudText Typo="Typo.h4" Color="Color.Success">@_data.Online</MudText></MudPaper></MudItem>
+        <MudItem xs="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.overline">Waiting for approval</MudText><MudText Typo="Typo.h4" Color="Color.Warning">@_data.Pending</MudText></MudPaper></MudItem>
+        <MudItem xs="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.overline">Offline agents</MudText><MudText Typo="Typo.h4" Color="Color.Error">@_data.Offline</MudText></MudPaper></MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6" Class="mb-2">Offline agents</MudText>
+                @if (_data.OfflineServers.Count == 0) { <MudText Color="Color.Success">All approved agents are online.</MudText> }
+                else
+                {
+                    <MudSimpleTable Dense="true" Hover="true">
+                        <thead><tr><th>Server</th><th>Environment</th><th>Last seen</th></tr></thead>
+                        <tbody>
+                        @foreach (var s in _data.OfflineServers)
+                        {
+                            <tr><td><MudLink Href="@($"/servers/{s.Id}")">@s.Name</MudLink></td><td>@s.EnvironmentName</td><td>@(s.LastSeenAt?.ToLocalTime().ToString("g") ?? "never")</td></tr>
+                        }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4">
+                <MudText Typo="Typo.h6" Class="mb-2">Certificates expiring within 30 days</MudText>
+                @if (_data.ExpiringCerts.Count == 0) { <MudText Color="Color.Success">None.</MudText> }
+                else
+                {
+                    <MudSimpleTable Dense="true" Hover="true">
+                        <thead><tr><th>Subject</th><th>Expires</th><th>Days left</th></tr></thead>
+                        <tbody>
+                        @foreach (var c in _data.ExpiringCerts)
+                        {
+                            <tr><td>@c.Subject</td><td>@c.NotAfter.ToLocalTime().ToString("d")</td><td>@(c.DaysLeft < 0 ? "expired" : c.DaysLeft.ToString())</td></tr>
+                        }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12">
+            <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined">Pending approvals and recent deployments will appear here from Phase 3.</MudAlert>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private DashboardData? _data;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Bus.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try { _data = await Queries.GetDashboardAsync(await Actors.GetAsync()); _error = null; }
+        catch (ForbiddenException) { _error = "You are signed in but have no role yet. Ask a Platform Admin to assign one."; }
+    }
+
+    private void OnChanged(ServerChanged e) => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

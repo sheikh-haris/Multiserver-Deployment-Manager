@@ -1,0 +1,32 @@
+<MudDialog>
+    <DialogContent>
+        <MudText Class="mb-3">@Message</MudText>
+        @if (RequireReason)
+        {
+            <MudTextField T="string" @bind-Value="_reason" Label="Reason (required)" Lines="2" Class="mb-3" />
+        }
+        <MudText Typo="Typo.body2" Class="mb-1">Type <b>@ConfirmText</b> to confirm.</MudText>
+        <MudTextField T="string" @bind-Value="_typed" Immediate="true" Variant="Variant.Outlined" Placeholder="@ConfirmText" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" Disabled="@(!CanConfirm)" OnClick="Confirm">@ButtonText</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public string Message { get; set; } = "";
+    [Parameter] public string ConfirmText { get; set; } = "";
+    [Parameter] public string ButtonText { get; set; } = "Confirm";
+    [Parameter] public bool RequireReason { get; set; }
+
+    private string _typed = "";
+    private string _reason = "";
+
+    private bool CanConfirm =>
+        string.Equals(_typed, ConfirmText, StringComparison.Ordinal) && (!RequireReason || !string.IsNullOrWhiteSpace(_reason));
+
+    private void Cancel() => Dialog.Cancel();
+    private void Confirm() => Dialog.Close(DialogResult.Ok(_reason.Trim()));
+}

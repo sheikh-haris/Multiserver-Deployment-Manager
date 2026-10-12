@@ -1,0 +1,87 @@
+@page "/servers"
+@attribute [Authorize(Policy = "perm:ViewServers")]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject ServerQueries Queries
+@inject ServerEventBus Bus
+@inject IDialogService Dialogs
+@inject NavigationManager Nav
+<PageTitle>Servers</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudText Typo="Typo.h4">Servers</MudText>
+    <MudSpacer />
+    @if (_canManage)
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddServer">Add server</MudButton>
+    }
+</MudStack>
+
+<MudDataGrid @ref="_grid" T="ServerRow" ServerData="LoadData" Hover="true" Dense="true" Filterable="false" SortMode="SortMode.Single"
+             RowClick="@((DataGridRowClickEventArgs<ServerRow> e) => Nav.NavigateTo($"/servers/{e.Item.Id}"))" Style="cursor:pointer">
+    <ToolBarContent>
+        <MudTextField T="string" Value="_search" ValueChanged="OnSearch" Placeholder="Search name or host" Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true" DebounceInterval="300" Class="mr-3" />
+        <MudSelect T="string" Value="_env" ValueChanged="OnEnv" Label="Environment" Clearable="true" Style="max-width:180px" Class="mr-3">
+            <MudSelectItem T="string" Value="@("Dev")">Dev</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Staging")">Staging</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Prod")">Prod</MudSelectItem>
+        </MudSelect>
+        <MudSelect T="AgentStatus?" Value="_status" ValueChanged="OnStatus" Label="Agent status" Clearable="true" Style="max-width:180px">
+            @foreach (var s in Enum.GetValues<AgentStatus>())
+            {
+                <MudSelectItem T="AgentStatus?" Value="@((AgentStatus?)s)">@s</MudSelectItem>
+            }
+        </MudSelect>
+    </ToolBarContent>
+    <Columns>
+        <PropertyColumn Property="x => x.Name" Title="Server" SortBy="@((ServerRow x) => x.Name)" />
+        <PropertyColumn Property="x => x.Hostname" Title="Host" Sortable="false" />
+        <TemplateColumn Title="Environment" SortBy="@((ServerRow x) => x.EnvironmentName)">
+            <CellTemplate>@(context.Item.EnvironmentName ?? (context.Item.DeclaredEnvironment is null ? "-" : $"{context.Item.DeclaredEnvironment} (unconfirmed)"))</CellTemplate>
+        </TemplateColumn>
+        <TemplateColumn Title="Mode" Sortable="false"><CellTemplate><StatusChip Status="@context.Item.Mode" /></CellTemplate></TemplateColumn>
+        <TemplateColumn Title="Agent" Sortable="false"><CellTemplate><StatusChip Status="@context.Item.AgentStatus.ToString()" /></CellTemplate></TemplateColumn>
+        <TemplateColumn Title="Last seen" SortBy="@((ServerRow x) => x.LastSeenAt)">
+            <CellTemplate>@(context.Item.LastSeenAt?.ToLocalTime().ToString("g") ?? "never")</CellTemplate>
+        </TemplateColumn>
+        <PropertyColumn Property="x => x.AgentVersion" Title="Agent version" Sortable="false" />
+    </Columns>
+    <PagerContent><MudDataGridPager T="ServerRow" PageSizeOptions="@(new[] { 10, 25, 50 })" /></PagerContent>
+    <NoRecordsContent><MudText Class="pa-4">No servers yet.</MudText></NoRecordsContent>
+</MudDataGrid>
+
+@code {
+    private MudDataGrid<ServerRow> _grid = default!;
+    private string? _search, _env;
+    private AgentStatus? _status;
+    private bool _canManage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _canManage = (await Actors.GetAsync()).Can(Permission.ManageServers);
+        Bus.Changed += OnChanged;
+    }
+
+    private async Task<GridData<ServerRow>> LoadData(GridState<ServerRow> state, CancellationToken ct)
+    {
+        var sort = state.SortDefinitions.FirstOrDefault();
+        var by = sort?.SortBy switch { var s when s?.Contains("EnvironmentName") == true => "Environment", var s when s?.Contains("LastSeenAt") == true => "LastSeenAt", _ => "Name" };
+        var (rows, total) = await Queries.ListAsync(await Actors.GetAsync(), _search, _env, _status, by, sort?.Descending ?? false, state.Page, state.PageSize);
+        return new GridData<ServerRow> { Items = rows, TotalItems = total };
+    }
+
+    private Task OnSearch(string v) { _search = v; return _grid.ReloadServerData(); }
+    private Task OnEnv(string v) { _env = v; return _grid.ReloadServerData(); }
+    private Task OnStatus(AgentStatus? v) { _status = v; return _grid.ReloadServerData(); }
+
+    private async Task AddServer()
+    {
+        var dlg = await Dialogs.ShowAsync<AddServerDialog>("Add server", new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseOnEscapeKey = true });
+        await dlg.Result;
+        await _grid.ReloadServerData();
+    }
+
+    private void OnChanged(ServerChanged e) => _ = InvokeAsync(async () => { if (_grid is not null) await _grid.ReloadServerData(); });
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

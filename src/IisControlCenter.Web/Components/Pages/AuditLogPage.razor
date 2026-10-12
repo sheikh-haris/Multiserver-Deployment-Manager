@@ -1,0 +1,66 @@
+@page "/audit"
+@attribute [Authorize(Policy = "perm:ViewAudit")]
+@inject ActorProvider Actors
+@inject AuditQueries Queries
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+<PageTitle>Audit log</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+    <MudText Typo="Typo.h4">Audit log</MudText>
+    <MudSpacer />
+    <MudButton Variant="Variant.Outlined" OnClick="Verify" StartIcon="@Icons.Material.Filled.VerifiedUser">Verify integrity</MudButton>
+    <MudButton Variant="Variant.Outlined" OnClick="Export" StartIcon="@Icons.Material.Filled.Download">Export CSV</MudButton>
+</MudStack>
+<MudText Typo="Typo.caption" Class="d-block mb-2">Append only. Entries cannot be changed or deleted from the portal.</MudText>
+
+<MudDataGrid @ref="_grid" T="AuditEntry" ServerData="Load" Dense="true" Hover="true" Filterable="false" SortMode="SortMode.None">
+    <ToolBarContent>
+        <MudTextField T="string" Value="_search" ValueChanged="OnSearch" Placeholder="Search user, action, target, detail" Immediate="true" DebounceInterval="300"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Class="mr-3" />
+        <MudSelect T="string" Value="_result" ValueChanged="OnResult" Label="Result" Clearable="true" Style="max-width:160px">
+            <MudSelectItem T="string" Value="@("Success")">Success</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Denied")">Denied</MudSelectItem>
+            <MudSelectItem T="string" Value="@("Failed")">Failed</MudSelectItem>
+        </MudSelect>
+    </ToolBarContent>
+    <Columns>
+        <TemplateColumn Title="Time"><CellTemplate>@context.Item.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</CellTemplate></TemplateColumn>
+        <PropertyColumn Property="x => x.UserName" Title="User" />
+        <PropertyColumn Property="x => x.Action" Title="Action" />
+        <TemplateColumn Title="Target"><CellTemplate>@context.Item.TargetType @context.Item.TargetId</CellTemplate></TemplateColumn>
+        <PropertyColumn Property="x => x.EnvironmentName" Title="Env" />
+        <TemplateColumn Title="Result"><CellTemplate><StatusChip Status="@context.Item.Result" /></CellTemplate></TemplateColumn>
+        <TemplateColumn Title="Details">
+            <CellTemplate>
+                <MudText Typo="Typo.caption">@context.Item.Detail</MudText>
+                @if (!string.IsNullOrEmpty(context.Item.Before)) { <MudText Typo="Typo.caption" Class="d-block">Before: @context.Item.Before</MudText> }
+                @if (!string.IsNullOrEmpty(context.Item.After)) { <MudText Typo="Typo.caption" Class="d-block">After: @context.Item.After</MudText> }
+            </CellTemplate>
+        </TemplateColumn>
+    </Columns>
+    <PagerContent><MudDataGridPager T="AuditEntry" PageSizeOptions="@(new[] { 25, 50, 100 })" /></PagerContent>
+</MudDataGrid>
+
+@code {
+    private MudDataGrid<AuditEntry> _grid = default!;
+    private string? _search, _result;
+
+    private async Task<GridData<AuditEntry>> Load(GridState<AuditEntry> s, CancellationToken ct)
+    {
+        var (rows, total) = await Queries.ListAsync(await Actors.GetAsync(), new AuditFilter(_search, null, _result, null, null), s.Page, s.PageSize);
+        return new GridData<AuditEntry> { Items = rows, TotalItems = total };
+    }
+    private Task OnSearch(string v) { _search = v; return _grid.ReloadServerData(); }
+    private Task OnResult(string v) { _result = v; return _grid.ReloadServerData(); }
+
+    private void Export() =>
+        Nav.NavigateTo($"/export/audit.csv?search={Uri.EscapeDataString(_search ?? "")}&result={Uri.EscapeDataString(_result ?? "")}", forceLoad: true);
+
+    private async Task Verify()
+    {
+        var broken = await Queries.VerifyChainAsync(await Actors.GetAsync());
+        if (broken is null) Snackbar.Add("Audit log is intact.", Severity.Success);
+        else Snackbar.Add($"Audit log was changed. First broken entry: {broken}.", Severity.Error);
+    }
+}

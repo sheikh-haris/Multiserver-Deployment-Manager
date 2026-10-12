@@ -1,0 +1,304 @@
+@page "/servers/{Id:guid}"
+@attribute [Authorize(Policy = "perm:ViewServers")]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject ServerQueries Queries
+@inject ServerService Servers
+@inject AgentCommandService Commands
+@inject ServerEventBus Bus
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>@(_server?.Name ?? "Server")</PageTitle>
+
+@if (_loaded && _server is null)
+{
+    <MudAlert Severity="Severity.Warning">Server not found, or you do not have access to it.</MudAlert>
+}
+else if (_server is not null && _actor is not null)
+{
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2" Wrap="Wrap.Wrap">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="@(() => Nav.NavigateTo("/servers"))" />
+        <MudText Typo="Typo.h4">@_server.Name</MudText>
+        <StatusChip Status="@_server.AgentStatus.ToString()" />
+        <StatusChip Status="@_server.Mode.ToString()" />
+        @if (_server.EnvironmentName is not null) { <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@_server.EnvironmentName</MudChip> }
+        <MudSpacer />
+        @if (_server.EnvironmentName is not null && _actor.Can(Permission.TriggerDiscovery, _server.EnvironmentName))
+        {
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="RunDiscovery"
+                       Disabled="@(_server.AgentStatus != AgentStatus.Online)">Run discovery</MudButton>
+        }
+    </MudStack>
+
+    @if (_server.AgentStatus == AgentStatus.Pending && _actor.Can(Permission.ManageServers))
+    {
+        <MudAlert Severity="Severity.Warning" Class="mb-3">
+            This agent registered and is waiting for approval. The agent says it was installed for
+            <b>@_server.DeclaredEnvironment</b>. It will start in <b>ReadOnly</b> mode.
+            <MudStack Row="true" Class="mt-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="Approve">Approve</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="Revoke">Reject</MudButton>
+            </MudStack>
+        </MudAlert>
+    }
+    @if (_server.AgentStatus == AgentStatus.NotRegistered && _actor.Can(Permission.ManageServers))
+    {
+        <MudAlert Severity="Severity.Info" Class="mb-3">
+            No agent has registered yet.
+            <MudButton Class="ml-2" Size="Size.Small" Variant="Variant.Outlined" OnClick="NewToken">Create a new registration token</MudButton>
+        </MudAlert>
+    }
+
+    <MudTabs Elevation="1" Rounded="true" TabPanelsClass="pa-4">
+        <MudTabPanel Text="Overview">
+            <MudGrid>
+                <MudItem xs="12" md="6">
+                    <MudSimpleTable Dense="true">
+                        <tbody>
+                            <tr><td>Host name</td><td>@(_server.Hostname ?? "-")</td></tr>
+                            <tr><td>Operating system</td><td>@(_server.OsVersion ?? "-")</td></tr>
+                            <tr><td>Domain joined</td><td>@(_server.IsDomainJoined ? "Yes" : "No")</td></tr>
+                            <tr><td>Agent version</td><td>@(_server.AgentVersion ?? "-")</td></tr>
+                            <tr><td>Allowed folders (set on the server)</td><td class="mono">@RootsText</td></tr>
+                            <tr><td>Managed mode allowed on server</td><td>@(_server.LocalAllowManaged ? "Yes" : "No")</td></tr>
+                            <tr><td>IIS installed</td><td>@(_server.IisInstalled ? "Yes" : "No / unknown")</td></tr>
+                            <tr><td>Last seen</td><td>@(_server.LastSeenAt?.ToLocalTime().ToString("g") ?? "never")</td></tr>
+                            <tr><td>Last discovery</td><td>@(_server.LastDiscoveryAt?.ToLocalTime().ToString("g") ?? "never")</td></tr>
+                            <tr><td>Approved by</td><td>@(_server.ApprovedBy ?? "-")</td></tr>
+                        </tbody>
+                    </MudSimpleTable>
+                </MudItem>
+                @if (_actor.Can(Permission.ManageServers) && _server.EnvironmentName is not null)
+                {
+                    <MudItem xs="12" md="6">
+                        <MudText Typo="Typo.subtitle1" Class="mb-2">Mode</MudText>
+                        <MudText Typo="Typo.body2" Class="mb-2">ReadOnly: the agent only reads. Managed: IIS changes through the portal (Phase 4). New servers always start ReadOnly.</MudText>
+                        <MudToggleGroup T="ServerMode" Value="_server.Mode" ValueChanged="SetMode" Color="Color.Primary">
+                            <MudToggleItem Value="ServerMode.ReadOnly" Text="ReadOnly" />
+                            <MudToggleItem Value="ServerMode.Managed" Text="Managed" Disabled="@(!_server.LocalAllowManaged)" />
+                        </MudToggleGroup>
+                        @if (!_server.LocalAllowManaged)
+                        {
+                            <MudText Typo="Typo.caption" Class="mt-1 d-block">Managed is disabled because the installer on the server did not allow it.</MudText>
+                        }
+                    </MudItem>
+                }
+                @if (_actor.Can(Permission.ManageServers) && _server.AgentStatus is not (AgentStatus.NotRegistered))
+                {
+                    <MudItem xs="12">
+                        <MudDivider Class="mb-3" />
+                        <MudStack Row="true">
+                            @if (_server.AgentStatus != AgentStatus.Revoked)
+                            {
+                                <MudButton Color="Color.Error" Variant="Variant.Outlined" OnClick="Revoke">Revoke agent certificate</MudButton>
+                            }
+                            else
+                            {
+                                <MudButton Variant="Variant.Outlined" OnClick="NewToken">Create a new registration token</MudButton>
+                            }
+                            <MudButton Color="Color.Error" Variant="Variant.Text" OnClick="Remove">Remove server</MudButton>
+                        </MudStack>
+                    </MudItem>
+                }
+            </MudGrid>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@($"IIS sites ({_inv?.Sites.Count ?? 0})")">
+            @if (_inv is null || _inv.Sites.Count == 0)
+            {
+                <MudText>No discovery data yet.</MudText>
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Class="mb-2 d-block">Read only. Everything starts Unassigned until it is mapped in Phase 2.</MudText>
+                @foreach (var site in _inv.Sites)
+                {
+                    <MudExpansionPanels Class="mb-1" Elevation="0" Outlined="true">
+                    <MudExpansionPanel>
+                        <TitleContent>
+                            <MudStack Row="true" AlignItems="AlignItems.Center">
+                                <MudIcon Icon="@Icons.Material.Filled.Language" />
+                                <MudText><b>@site.Name</b></MudText>
+                                <MudText Typo="Typo.caption">id @site.IisSiteId</MudText>
+                                <StatusChip Status="@site.State" />
+                                <StatusChip Status="@site.MappingStatus.ToString()" />
+                            </MudStack>
+                        </TitleContent>
+                        <ChildContent>
+                            <MudText Typo="Typo.caption">Bindings</MudText>
+                            <MudSimpleTable Dense="true" Class="mb-3">
+                                <thead><tr><th>Protocol</th><th>Address</th><th>Port</th><th>Host name</th><th>Certificate</th></tr></thead>
+                                <tbody>
+                                @foreach (var b in site.Bindings)
+                                {
+                                    <tr><td>@b.Protocol</td><td>@(b.IpAddress ?? "*")</td><td>@b.Port</td><td>@(b.Host ?? "")</td><td class="mono">@b.CertThumbprint</td></tr>
+                                }
+                                </tbody>
+                            </MudSimpleTable>
+                            <MudText Typo="Typo.caption">Applications and virtual directories</MudText>
+                            <MudSimpleTable Dense="true">
+                                <thead><tr><th>Type</th><th>Path</th><th>Physical path</th><th>App pool</th></tr></thead>
+                                <tbody>
+                                @foreach (var app in site.Applications.OrderBy(a => a.Path))
+                                {
+                                    <tr><td>Application</td><td>@app.Path</td><td class="mono">@app.PhysicalPath</td><td>@app.AppPoolName</td></tr>
+                                    @foreach (var v in app.VirtualDirs.Where(v => v.Path != "/").OrderBy(v => v.Path))
+                                    {
+                                        <tr><td class="pl-6">Virtual directory</td><td>@v.Path</td><td class="mono">@v.PhysicalPath</td><td></td></tr>
+                                    }
+                                }
+                                </tbody>
+                            </MudSimpleTable>
+                        </ChildContent>
+                    </MudExpansionPanel>
+                    </MudExpansionPanels>
+                }
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="@($"App pools ({_inv?.Pools.Count ?? 0})")">
+            <MudSimpleTable Dense="true" Hover="true">
+                <thead><tr><th>Name</th><th>Identity</th><th>.NET CLR</th><th>Pipeline</th><th>State</th></tr></thead>
+                <tbody>
+                @foreach (var p in _inv?.Pools ?? [])
+                {
+                    <tr>
+                        <td>@p.Name</td>
+                        <td>@p.IdentityType @if (p.IdentityType == "LocalSystem") { <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Size="Size.Small" title="Runs as LocalSystem" /> }</td>
+                        <td>@(string.IsNullOrEmpty(p.RuntimeVersion) ? "No managed code" : p.RuntimeVersion)</td>
+                        <td>@p.PipelineMode</td>
+                        <td><StatusChip Status="@p.State" /></td>
+                    </tr>
+                }
+                </tbody>
+            </MudSimpleTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@($"Certificates ({_inv?.Certs.Count ?? 0})")">
+            <MudSimpleTable Dense="true" Hover="true">
+                <thead><tr><th>Subject</th><th>Thumbprint</th><th>Store</th><th>Expires</th></tr></thead>
+                <tbody>
+                @foreach (var c in _inv?.Certs ?? [])
+                {
+                    var days = (int)Math.Floor((c.NotAfter - DateTimeOffset.UtcNow).TotalDays);
+                    <tr>
+                        <td>@c.Subject</td><td class="mono">@c.Thumbprint</td><td>@c.Store</td>
+                        <td>@c.NotAfter.ToLocalTime().ToString("d") <MudChip T="string" Size="Size.Small" Color="@(days < 0 ? Color.Error : days <= 30 ? Color.Warning : Color.Default)">@(days < 0 ? "expired" : $"{days} days")</MudChip></td>
+                    </tr>
+                }
+                </tbody>
+            </MudSimpleTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@($".NET ({_inv?.DotNet.Count ?? 0})")">
+            <MudSimpleTable Dense="true">
+                <thead><tr><th>Kind</th><th>Version</th></tr></thead>
+                <tbody>@foreach (var v in _inv?.DotNet ?? []) { <tr><td>@v.Kind</td><td>@v.Version</td></tr> }</tbody>
+            </MudSimpleTable>
+        </MudTabPanel>
+    </MudTabs>
+}
+else
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private Server? _server;
+    private ServerQueries.Inventory? _inv;
+    private Actor? _actor;
+    private bool _loaded;
+
+    private string RootsText
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_server?.AllowedRoots)) return "-";
+            try { return string.Join(", ", System.Text.Json.JsonSerializer.Deserialize<string[]>(_server.AllowedRoots) ?? []); }
+            catch { return _server.AllowedRoots; }
+        }
+    }
+
+    protected override async Task OnInitializedAsync() => Bus.Changed += OnChanged;
+    protected override async Task OnParametersSetAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        _actor = await Actors.GetAsync();
+        _server = await Queries.GetAsync(_actor, Id);
+        _inv = _server is null ? null : await Queries.GetInventoryAsync(_actor, Id);
+        _loaded = true;
+    }
+
+    private void OnChanged(ServerChanged e)
+    {
+        if (e.ServerId != Id) return;
+        _ = InvokeAsync(async () => { await Reload(); StateHasChanged(); });
+    }
+
+    private async Task Run(Func<Task<OpResult>> action, string ok)
+    {
+        try
+        {
+            var r = await action();
+            Snackbar.Add(r.Ok ? ok : r.Error ?? "Failed", r.Ok ? Severity.Success : Severity.Error);
+        }
+        catch (ForbiddenException ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        await Reload();
+    }
+
+    private Task RunDiscovery() => Run(async () => await Commands.RequestDiscoveryAsync(_actor!, Id), "Discovery requested. Results appear in a few seconds.");
+    private Task SetMode(ServerMode m) => Run(() => Servers.SetModeAsync(_actor!, Id, m), $"Mode set to {m}.");
+
+    private async Task Approve()
+    {
+        var dlg = await Dialogs.ShowAsync<ApproveDialog>("Approve server", new DialogParameters<ApproveDialog> { { x => x.Declared, _server!.DeclaredEnvironment } },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var res = await dlg.Result;
+        if (res is { Canceled: false, Data: string env })
+            await Run(() => Servers.ApproveAsync(_actor!, Id, env), "Server approved. It starts in ReadOnly mode.");
+    }
+
+    private async Task Revoke()
+    {
+        var res = await Confirm("Revoke agent", $"This blocks the agent's certificate immediately. The agent can only come back with a new registration token.", _server!.Name, "Revoke", reason: true);
+        if (res is { Canceled: false, Data: string reason })
+            await Run(() => Servers.RevokeAsync(_actor!, Id, reason), "Agent revoked.");
+    }
+
+    private async Task Remove()
+    {
+        var res = await Confirm("Remove server", "The server is removed from the portal and its certificate is revoked. History stays in the audit log.", _server!.Name, "Remove", reason: false);
+        if (res is { Canceled: false })
+        {
+            var r = await Servers.RemoveAsync(_actor!, Id);
+            if (r.Ok) Nav.NavigateTo("/servers"); else Snackbar.Add(r.Error ?? "Failed", Severity.Error);
+        }
+    }
+
+    private async Task NewToken()
+    {
+        try
+        {
+            var r = await Servers.ReissueTokenAsync(_actor!, Id);
+            if (!r.Ok) { Snackbar.Add(r.Error ?? "Failed", Severity.Error); return; }
+            await Dialogs.ShowAsync<TokenDialog>("Registration token", new DialogParameters<TokenDialog> { { x => x.Result, r.Value } }, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+            await Reload();
+        }
+        catch (ForbiddenException ex) { Snackbar.Add(ex.Message, Severity.Error); }
+    }
+
+    private async Task<DialogResult?> Confirm(string title, string message, string confirm, string button, bool reason)
+    {
+        var dlg = await Dialogs.ShowAsync<ConfirmDangerDialog>(title, new DialogParameters<ConfirmDangerDialog>
+        {
+            { x => x.Message, message }, { x => x.ConfirmText, confirm }, { x => x.ButtonText, button }, { x => x.RequireReason, reason },
+        }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        return await dlg.Result;
+    }
+
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

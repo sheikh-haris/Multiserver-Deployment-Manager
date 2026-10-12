@@ -1,0 +1,8 @@
+@page "/signed-out"
+@attribute [AllowAnonymous]
+@inject NavigationManager Nav
+<PageTitle>Signed out</PageTitle>
+<MudPaper Class="pa-6 mt-6">
+    <MudText Typo="Typo.h6">You are signed out.</MudText>
+    <MudButton Class="mt-3" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => Nav.NavigateTo("/login", forceLoad: true))">Sign in again</MudButton>
+</MudPaper>

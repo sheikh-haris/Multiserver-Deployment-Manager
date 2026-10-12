@@ -1,0 +1,18 @@
+<MudNavMenu>
+    <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
+    <AuthorizeView Policy="@Policies.For(Permission.ViewServers)">
+        <MudNavLink Href="/servers" Icon="@Icons.Material.Filled.Dns">Servers</MudNavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.For(Permission.ViewDiscoveryReport)">
+        <MudNavLink Href="/reports/discovery" Icon="@Icons.Material.Filled.FactCheck">Discovery report</MudNavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.For(Permission.ViewAudit)">
+        <MudNavLink Href="/audit" Icon="@Icons.Material.Filled.History">Audit log</MudNavLink>
+    </AuthorizeView>
+    <AuthorizeView Policy="@Policies.For(Permission.ManageRoles)">
+        <MudNavGroup Title="Admin" Icon="@Icons.Material.Filled.AdminPanelSettings" Expanded="true">
+            <MudNavLink Href="/admin/roles" Icon="@Icons.Material.Filled.Groups">Platform roles</MudNavLink>
+            <MudNavLink Href="/admin/settings" Icon="@Icons.Material.Filled.Settings">Settings</MudNavLink>
+        </MudNavGroup>
+    </AuthorizeView>
+</MudNavMenu>

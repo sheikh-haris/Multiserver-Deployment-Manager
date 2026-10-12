@@ -1,0 +1,19 @@
+@inject IConfiguration Config
+@inject IJSRuntime Js
+@inject ISnackbar Snackbar
+<MudDialog>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Class="mb-3">Shown once. Expires at <b>@Result!.ExpiresAt.ToLocalTime().ToString("g")</b>. One use only.</MudAlert>
+        <MudTextField T="string" Value="Result!.Token" ReadOnly="true" Label="Registration token" Class="mono" />
+        <MudText Typo="Typo.subtitle2" Class="mt-4 mb-1">Run on the IIS server, as Administrator:</MudText>
+        <MudPaper Outlined="true" Class="pa-3 mono" Style="white-space:pre-wrap;word-break:break-all">@Command</MudPaper>
+        <MudButton Class="mt-2" StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="Copy">Copy command</MudButton>
+    </DialogContent>
+    <DialogActions><MudButton Color="Color.Primary" OnClick="() => Dialog.Close()">Done</MudButton></DialogActions>
+</MudDialog>
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public NewServerResult? Result { get; set; }
+    private string Command => $".\\Install-Agent.ps1 -PortalUrl https://{Config["Portal:AgentsHost"] ?? "agents.example.local"} -Token {Result!.Token} -Environment <Dev|Staging|Prod> -AllowedRoots 'D:\\Websites' -AgentExePath .\\IisControlCenter.Agent.exe";
+    private async Task Copy() { await Js.InvokeVoidAsync("navigator.clipboard.writeText", Command); Snackbar.Add("Copied", Severity.Success); }
+}

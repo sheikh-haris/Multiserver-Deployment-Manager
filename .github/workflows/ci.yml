@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  unit:
+    name: Build and unit tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet build -c Release
+      - run: dotnet test -c Release --no-build --filter "FullyQualifiedName!~IntegrationTests" --logger "trx;LogFileName=unit.trx"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: '**/TestResults/*.trx'
+
+  windows-iis:
+    name: Agent on real IIS (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install the IIS role
+        shell: pwsh
+        run: |
+          Install-WindowsFeature -Name Web-Server, Web-Mgmt-Tools -ErrorAction Stop | Out-String | Write-Host
+          Get-Service W3SVC | Out-String | Write-Host
+
+      - name: Integration tests (IIS inspector against real IIS)
+        shell: pwsh
+        run: dotnet test tests/IisControlCenter.Agent.IntegrationTests -c Release --logger "trx;LogFileName=iis.trx"
+
+      - name: Publish the agent as one self-contained file
+        shell: pwsh
+        run: dotnet publish src/IisControlCenter.Agent -c Release -r win-x64 -p:PublishSingleFile=true -o publish/agent
+
+      - name: Single-file agent can read this machine's IIS
+        shell: pwsh
+        run: |
+          $exe = 'publish/agent/IisControlCenter.Agent.exe'
+          & $exe version
+          $json = & $exe discover | Out-String
+          $r = $json | ConvertFrom-Json
+          if (-not $r.IisInstalled) { throw 'Agent says IIS is not installed.' }
+          if (-not ($r.Sites | Where-Object { $_.Name -eq 'Default Web Site' })) { throw 'Default Web Site not found in discovery output.' }
+          Write-Host "Discovery found $($r.Sites.Count) site(s), $($r.AppPools.Count) pool(s)."
+
+      - name: Installer script validates its inputs (changes nothing)
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash publish/agent/IisControlCenter.Agent.exe -Algorithm SHA256).Hash
+          ./installer/Install-Agent.ps1 -PortalUrl https://agents.example.invalid -Token 12345678 -Environment Dev `
+            -AllowedRoots 'D:\Websites' -AgentExePath publish/agent/IisControlCenter.Agent.exe -ExpectedSha256 $hash -ValidateOnly
+          foreach ($bad in 'C:\Windows', 'D:\', '..\x', 'D:\Websites\..\x') {
+            $failed = $false
+            try { ./installer/Install-Agent.ps1 -PortalUrl https://agents.example.invalid -Token 12345678 -Environment Dev `
+                    -AllowedRoots $bad -AgentExePath publish/agent/IisControlCenter.Agent.exe -ValidateOnly } catch { $failed = $true }
+            if (-not $failed) { throw "Installer accepted the unsafe root '$bad'." }
+          }
+
+      - name: PowerShell lint
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $res = Invoke-ScriptAnalyzer -Path installer -Severity Error,Warning -ExcludeRule PSAvoidUsingWriteHost,PSUseShouldProcessForStateChangingFunctions
+          $res | Format-Table -AutoSize | Out-String | Write-Host
+          if ($res | Where-Object Severity -eq 'Error') { throw 'PSScriptAnalyzer found errors.' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-win-x64
+          path: publish/agent/IisControlCenter.Agent.exe
