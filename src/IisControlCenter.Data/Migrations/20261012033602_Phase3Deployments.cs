@@ -11,6 +11,13 @@ namespace IisControlCenter.Data.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.AddColumn<string>(
+                name: "NotificationEmail",
+                table: "Projects",
+                type: "nvarchar(320)",
+                maxLength: 320,
+                nullable: true);
+
             migrationBuilder.CreateTable(
                 name: "Notifications",
                 columns: table => new
@@ -179,6 +186,7 @@ namespace IisControlCenter.Data.Migrations
                     RequestId = table.Column<Guid>(type: "uniqueidentifier", nullable: false),
                     ApproverId = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
                     ApproverName = table.Column<string>(type: "nvarchar(300)", maxLength: 300, nullable: false),
+                    ApproverEmail = table.Column<string>(type: "nvarchar(320)", maxLength: 320, nullable: true),
                     Decision = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
                     Comment = table.Column<string>(type: "nvarchar(2000)", maxLength: 2000, nullable: true),
                     DecidedAt = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false),
@@ -429,6 +437,10 @@ namespace IisControlCenter.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "Packages");
+
+            migrationBuilder.DropColumn(
+                name: "NotificationEmail",
+                table: "Projects");
         }
     }
 }

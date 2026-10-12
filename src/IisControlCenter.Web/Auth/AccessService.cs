@@ -76,7 +76,8 @@ public sealed class ActorProvider(
         _ip ??= http.HttpContext?.Connection.RemoteIpAddress?.ToString();
         var evaluator = await access.GetEvaluatorAsync(principal);
         var u = UserClaims.ToContext(principal);
-        return new Actor(u.UserId, u.DisplayName, _ip, evaluator);
+        var email = principal.FindFirstValue("email") ?? (principal.FindFirstValue(UserClaims.Username) is { } upn && upn.Contains('@') ? upn : null);
+        return new Actor(u.UserId, u.DisplayName, _ip, evaluator, email);
     }
 }
 

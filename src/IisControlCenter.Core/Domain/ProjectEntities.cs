@@ -12,6 +12,8 @@ public class Project
     public bool IsActive { get; set; } = true;
     /// <summary>1 or 2. Used for direct-to-Production deployments (Phase 3).</summary>
     public int ProdApproversRequired { get; set; } = 1;
+    /// <summary>Address (or distribution list) that gets an email when a request needs approval and when it finishes.</summary>
+    public string? NotificationEmail { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public string CreatedBy { get; set; } = "";
     public List<Component> Components { get; set; } = new();

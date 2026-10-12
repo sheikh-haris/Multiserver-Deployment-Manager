@@ -92,6 +92,19 @@ public sealed class AccessEvaluator
         return false;
     }
 
+    /// <summary>The assignments (not the platform override) that currently allow this project permission in this environment.</summary>
+    public IReadOnlyList<RoleAssignment> AssignmentsFor(ProjectPermission permission, Guid projectId, string? environment)
+    {
+        var list = new List<RoleAssignment>();
+        foreach (var a in _assignments)
+        {
+            if (a.Scope != RoleScope.Project || a.ProjectId != projectId || !ProjectRolePermissions.Grants(a.Role, permission)) continue;
+            if (ProjectRolePermissions.IsEnvironmentScoped(a.Role) && !string.Equals(a.EnvironmentName, environment, StringComparison.OrdinalIgnoreCase)) continue;
+            list.Add(a);
+        }
+        return list;
+    }
+
     /// <summary>Environments in which the user holds a role that grants this permission on the project.</summary>
     public IReadOnlySet<string> EnvironmentsFor(ProjectPermission permission, Guid projectId)
     {

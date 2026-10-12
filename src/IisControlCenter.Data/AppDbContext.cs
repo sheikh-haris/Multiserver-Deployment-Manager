@@ -212,6 +212,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.Description).HasMaxLength(2000);
             e.Property(x => x.OwnerGroupId).HasMaxLength(100);
             e.Property(x => x.OwnerGroupName).HasMaxLength(300);
+            e.Property(x => x.NotificationEmail).HasMaxLength(320);
             e.Property(x => x.CreatedBy).HasMaxLength(200);
             e.HasIndex(x => x.Name).IsUnique();
             e.HasIndex(x => x.Slug).IsUnique();
@@ -375,6 +376,7 @@ public class AppDbContext : DbContext
             e.HasKey(x => x.Id);
             e.Property(x => x.ApproverId).HasMaxLength(100);
             e.Property(x => x.ApproverName).HasMaxLength(300);
+            e.Property(x => x.ApproverEmail).HasMaxLength(320);
             e.Property(x => x.Decision).HasConversion<string>().HasMaxLength(20);
             e.Property(x => x.Comment).HasMaxLength(2000);
             e.HasIndex(x => new { x.RequestId, x.ApproverId });

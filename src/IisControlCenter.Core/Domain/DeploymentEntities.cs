@@ -121,6 +121,7 @@ public class Approval
     public Guid RequestId { get; set; }
     public string ApproverId { get; set; } = "";
     public string ApproverName { get; set; } = "";
+    public string? ApproverEmail { get; set; }
     public ApprovalDecision Decision { get; set; }
     public string? Comment { get; set; }
     public DateTimeOffset DecidedAt { get; set; }

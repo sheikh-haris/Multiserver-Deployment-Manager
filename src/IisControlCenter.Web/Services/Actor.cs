@@ -22,11 +22,12 @@ public sealed class Actor
     public string UserId { get; }
     public string UserName { get; }
     public string? Ip { get; }
+    public string? Email { get; }
     public AccessEvaluator Access { get; }
 
-    public Actor(string userId, string userName, string? ip, AccessEvaluator access)
+    public Actor(string userId, string userName, string? ip, AccessEvaluator access, string? email = null)
     {
-        UserId = userId; UserName = userName; Ip = ip; Access = access;
+        UserId = userId; UserName = userName; Ip = ip; Access = access; Email = email;
     }
 
     public bool Can(Permission p, string? environment = null) => Access.Can(p, environment);

@@ -73,6 +73,10 @@ namespace IisControlCenter.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("ApproverEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("nvarchar(320)");
+
                     b.Property<string>("ApproverId")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -1136,6 +1140,10 @@ namespace IisControlCenter.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("NotificationEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("nvarchar(320)");
 
                     b.Property<string>("OwnerGroupId")
                         .HasMaxLength(100)

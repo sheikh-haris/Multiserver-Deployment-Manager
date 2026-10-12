@@ -52,6 +52,40 @@ public sealed class AgentCommandService(
         return OpResult.Success();
     }
 
+    public CommandEnvelope NewEnvelope(Server s, TimeSpan? lifetime = null)
+    {
+        var now = clock.GetUtcNow();
+        return new CommandEnvelope(Guid.NewGuid(), s.Id, s.EnvironmentName ?? "", now, now + (lifetime ?? CommandLifetime), Guid.NewGuid().ToString("N"), s.Mode);
+    }
+
+    private string? Connection(Server s) => s.EnvironmentName is null || s.AgentStatus == AgentStatus.Revoked ? null : tracker.GetConnectionId(s.Id);
+
+    public async Task<OpResult> SendManifestAsync(Server s, CommandEnvelope env, ManifestRequest req)
+    {
+        var c = Connection(s); if (c is null) return OpResult.Fail($"The agent on {s.Name} is offline.");
+        await hub.Clients.Client(c).GetManifest(env, req); return OpResult.Success();
+    }
+
+    public async Task<OpResult> SendMaskedFileAsync(Server s, CommandEnvelope env, MaskedFileRequest req)
+    {
+        var c = Connection(s); if (c is null) return OpResult.Fail($"The agent on {s.Name} is offline.");
+        await hub.Clients.Client(c).GetMaskedFile(env, req); return OpResult.Success();
+    }
+
+    public async Task<OpResult> SendDeployAsync(Server s, CommandEnvelope env, DeployCommand cmd)
+    {
+        var c = Connection(s); if (c is null) return OpResult.Fail($"The agent on {s.Name} is offline.");
+        await hub.Clients.Client(c).Deploy(env, cmd); return OpResult.Success();
+    }
+
+    public async Task<OpResult> SendRollbackAsync(Server s, CommandEnvelope env, RollbackCommand cmd)
+    {
+        var c = Connection(s); if (c is null) return OpResult.Fail($"The agent on {s.Name} is offline.");
+        await hub.Clients.Client(c).RollbackRun(env, cmd); return OpResult.Success();
+    }
+
+    public bool IsConnected(Guid serverId) => tracker.IsConnected(serverId);
+
     /// <summary>True once per issued command id for that server.</summary>
     public bool ConsumeIssued(Guid commandId, Guid serverId)
     {

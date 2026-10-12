@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IisControlCenter.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20261012031936_Phase3Deployments")]
+    [Migration("20261012033602_Phase3Deployments")]
     partial class Phase3Deployments
     {
         /// <inheritdoc />
@@ -75,6 +75,10 @@ namespace IisControlCenter.Data.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ApproverEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("nvarchar(320)");
 
                     b.Property<string>("ApproverId")
                         .IsRequired()
@@ -1139,6 +1143,10 @@ namespace IisControlCenter.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("NotificationEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("nvarchar(320)");
 
                     b.Property<string>("OwnerGroupId")
                         .HasMaxLength(100)
