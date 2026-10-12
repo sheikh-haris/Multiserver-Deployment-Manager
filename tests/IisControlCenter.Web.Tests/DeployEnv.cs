@@ -189,6 +189,8 @@ public sealed class DeployEnv : IDisposable
         return await db.Packages.AsNoTracking().FirstAsync(p => p.Id == info.PackageId);
     }
 
+    public Task<Package> Upload(Actor by, string env, (string Path, string Content)[] files, string name) => Upload(by, env, Zip(files), name);
+
     public Task<Package> Upload(Actor by, string env, params (string Path, string Content)[] files) => Upload(by, env, Zip(files));
 
     public SubmitCommand Cmd(Package p, string env, IEnumerable<Guid>? targets = null, DeployMode mode = DeployMode.Overlay, string? source = "PR-1",
