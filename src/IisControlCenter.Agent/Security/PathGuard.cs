@@ -18,6 +18,11 @@ public static class PathGuard
     public static string? Normalize(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return null;
+#if DEBUG
+        // Development only: allow POSIX paths so the portal and agent can be tried on Linux or macOS. Not compiled into Release builds.
+        if (Environment.GetEnvironmentVariable("ICC_DEV_POSIX_PATHS") == "1" && path.StartsWith('/') && !path.Contains("..") && !path.Contains('\\') && !path.Contains('\0') && path == path.Trim())
+            return path.TrimEnd('/').Length == 0 ? "/" : path.TrimEnd('/');
+#endif
         if (path != path.Trim()) return null;                       // leading or trailing spaces: refuse instead of guessing
         var p = path.Replace('/', '\\');
         if (p.Contains('\0')) return null;
@@ -61,7 +66,8 @@ public static class PathGuard
         {
             var root = Normalize(r);
             if (root is null || ValidateRoot(r) is not null) continue;
-            if (n == root || n.StartsWith(root + "\\", StringComparison.Ordinal)) return true;
+            var sep = n.StartsWith('/') ? "/" : "\\";        // '/' only exists in Development builds (ICC_DEV_POSIX_PATHS)
+            if (n == root || n.StartsWith(root + sep, StringComparison.Ordinal)) return true;
         }
         return false;
     }

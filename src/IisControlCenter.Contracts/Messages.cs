@@ -3,13 +3,16 @@ namespace IisControlCenter.Contracts;
 /// <summary>Bump when a breaking change is made to any message below.</summary>
 public static class ContractInfo
 {
-    public const int Version = 1;
-    public const int MinimumAgentVersion = 1;
+    public const int Version = 2;
+    public const int MinimumAgentVersion = 2;   // Phase 3 agents understand deployment commands
 
     public static class Routes
     {
         public const string AgentHub = "/hubs/agent";
         public const string Register = "/api/agent/register";
+        public const string AgentResults = "/api/agent/results";      // manifest inputs and uploads
+        public const string AgentRuns = "/api/agent/runs";            // plan input per run
+        public const string AgentPackages = "/api/agent/packages";    // package download
     }
 }
 
@@ -51,6 +54,10 @@ public interface IAgentClient
 {
     Task RunDiscovery(CommandEnvelope envelope);
     Task Ping(CommandEnvelope envelope);
+    Task GetManifest(CommandEnvelope envelope, ManifestRequest request);
+    Task GetMaskedFile(CommandEnvelope envelope, MaskedFileRequest request);
+    Task Deploy(CommandEnvelope envelope, DeployCommand command);
+    Task RollbackRun(CommandEnvelope envelope, RollbackCommand command);
     /// <summary>Tells the agent its certificate was revoked or the server removed. Agent stops reconnecting.</summary>
     Task Disconnect(string reason);
 }

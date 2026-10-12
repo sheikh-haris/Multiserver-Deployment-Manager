@@ -30,6 +30,16 @@ public class AppDbContext : DbContext
     public DbSet<LinkException> LinkExceptions => Set<LinkException>();
     public DbSet<LinkRequest> LinkRequests => Set<LinkRequest>();
     public DbSet<DriftEvent> DriftEvents => Set<DriftEvent>();
+    public DbSet<UploadSession> UploadSessions => Set<UploadSession>();
+    public DbSet<Package> Packages => Set<Package>();
+    public DbSet<DeploymentRequest> DeploymentRequests => Set<DeploymentRequest>();
+    public DbSet<RequestTarget> RequestTargets => Set<RequestTarget>();
+    public DbSet<ForcedFile> ForcedFiles => Set<ForcedFile>();
+    public DbSet<Approval> Approvals => Set<Approval>();
+    public DbSet<DeploymentRun> DeploymentRuns => Set<DeploymentRun>();
+    public DbSet<DeploymentLogLine> DeploymentLogLines => Set<DeploymentLogLine>();
+    public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<ProtectedListConfirmation> ProtectedListConfirmations => Set<ProtectedListConfirmation>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -291,6 +301,129 @@ public class AppDbContext : DbContext
             e.Property(x => x.AcknowledgedBy).HasMaxLength(300);
             e.HasIndex(x => new { x.ServerId, x.DetectedAt });
             e.HasOne<Server>().WithMany().HasForeignKey(x => x.ServerId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<UploadSession>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.UserId).HasMaxLength(100);
+            e.Property(x => x.UserName).HasMaxLength(300);
+            e.Property(x => x.FileName).HasMaxLength(300);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.Error).HasMaxLength(1000);
+            e.HasOne<Component>().WithMany().HasForeignKey(x => x.ComponentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => x.ExpiresAt);
+        });
+
+        b.Entity<Package>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.FileName).HasMaxLength(300);
+            e.Property(x => x.Sha256).HasMaxLength(64);
+            e.Property(x => x.StoragePath).HasMaxLength(1000);
+            e.Property(x => x.AvResult).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.AvDetail).HasMaxLength(1000);
+            e.Property(x => x.UploadedBy).HasMaxLength(300);
+            e.Property(x => x.UploadedById).HasMaxLength(100);
+            e.HasIndex(x => new { x.ComponentId, x.Sha256 });
+            e.HasIndex(x => x.ExpiresAt);
+            e.HasOne<Component>().WithMany().HasForeignKey(x => x.ComponentId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<DeploymentRequest>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Type).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.EnvironmentName).HasMaxLength(50);
+            e.Property(x => x.SourceReference).HasMaxLength(300);
+            e.Property(x => x.Notes).HasMaxLength(4100);
+            e.Property(x => x.DirectToProdReason).HasMaxLength(1000);
+            e.Property(x => x.SingleServerReason).HasMaxLength(1000);
+            e.Property(x => x.StatusDetail).HasMaxLength(1000);
+            e.Property(x => x.RequestedBy).HasMaxLength(300);
+            e.Property(x => x.RequestedById).HasMaxLength(100);
+            e.Property(x => x.RequestedByEmail).HasMaxLength(320);
+            e.Property(x => x.SubmitAssignmentIds).HasMaxLength(2000);
+            e.HasIndex(x => new { x.Status, x.EnvironmentName });
+            e.HasIndex(x => new { x.ComponentId, x.EnvironmentName, x.Status });
+            e.HasOne<Component>().WithMany().HasForeignKey(x => x.ComponentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Package>().WithMany().HasForeignKey(x => x.PackageId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<EnvironmentDef>().WithMany().HasForeignKey(x => x.EnvironmentName).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<RequestTarget>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.PhysicalPathAtSubmit).HasMaxLength(1000);
+            e.Property(x => x.DeletionWarning).HasMaxLength(500);
+            e.HasIndex(x => new { x.RequestId, x.DeployOrder });
+            e.HasOne<DeploymentRequest>().WithMany().HasForeignKey(x => x.RequestId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<DeploymentTarget>().WithMany().HasForeignKey(x => x.DeploymentTargetId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<ForcedFile>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Path).HasMaxLength(1000);
+            e.Property(x => x.Reason).HasMaxLength(1000);
+            e.HasOne<DeploymentRequest>().WithMany().HasForeignKey(x => x.RequestId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<Approval>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.ApproverId).HasMaxLength(100);
+            e.Property(x => x.ApproverName).HasMaxLength(300);
+            e.Property(x => x.Decision).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.Comment).HasMaxLength(2000);
+            e.HasIndex(x => new { x.RequestId, x.ApproverId });
+            e.HasOne<DeploymentRequest>().WithMany().HasForeignKey(x => x.RequestId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<DeploymentRun>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.BackupId).HasMaxLength(100);
+            e.Property(x => x.BackupPath).HasMaxLength(1000);
+            e.Property(x => x.FailureStep).HasMaxLength(100);
+            e.Property(x => x.Message).HasMaxLength(2000);
+            e.Property(x => x.HealthDetail).HasMaxLength(1000);
+            e.Property(x => x.CurrentStep).HasMaxLength(100);
+            e.HasIndex(x => new { x.RequestId, x.Sequence });
+            e.HasOne<DeploymentRequest>().WithMany().HasForeignKey(x => x.RequestId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<DeploymentTarget>().WithMany().HasForeignKey(x => x.DeploymentTargetId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<DeploymentLogLine>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).ValueGeneratedOnAdd();
+            e.Property(x => x.Level).HasMaxLength(20);
+            e.Property(x => x.Step).HasMaxLength(100);
+            e.Property(x => x.Message).HasMaxLength(4000);
+            e.HasIndex(x => new { x.RunId, x.Seq });
+            e.HasOne<DeploymentRun>().WithMany().HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<Notification>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Kind).HasMaxLength(50);
+            e.Property(x => x.ToAddress).HasMaxLength(320);
+            e.Property(x => x.Subject).HasMaxLength(300);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.Error).HasMaxLength(1000);
+            e.HasIndex(x => x.Status);
+        });
+
+        b.Entity<ProtectedListConfirmation>(e =>
+        {
+            e.HasKey(x => x.ComponentId);
+            e.Property(x => x.ConfirmedBy).HasMaxLength(300);
+            e.Property(x => x.ListHash).HasMaxLength(64);
+            e.HasOne<Component>().WithMany().HasForeignKey(x => x.ComponentId).OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<Setting>(e =>

@@ -20,6 +20,18 @@ public sealed class RecordingAgentClient : IAgentClient
     public List<string> Disconnects { get; } = [];
     public Task RunDiscovery(CommandEnvelope e) { Discoveries.Add(e); return Task.CompletedTask; }
     public Task Ping(CommandEnvelope e) => Task.CompletedTask;
+    public List<(CommandEnvelope Env, ManifestRequest Request)> Manifests { get; } = [];
+    public List<(CommandEnvelope Env, MaskedFileRequest Request)> MaskedFiles { get; } = [];
+    public List<(CommandEnvelope Env, DeployCommand Command)> Deploys { get; } = [];
+    public List<(CommandEnvelope Env, RollbackCommand Command)> Rollbacks { get; } = [];
+    public Func<CommandEnvelope, ManifestRequest, Task>? OnManifest { get; set; }
+    public Func<CommandEnvelope, MaskedFileRequest, Task>? OnMaskedFile { get; set; }
+    public Func<CommandEnvelope, DeployCommand, Task>? OnDeploy { get; set; }
+    public Func<CommandEnvelope, RollbackCommand, Task>? OnRollback { get; set; }
+    public Task GetManifest(CommandEnvelope e, ManifestRequest r) { Manifests.Add((e, r)); return OnManifest?.Invoke(e, r) ?? Task.CompletedTask; }
+    public Task GetMaskedFile(CommandEnvelope e, MaskedFileRequest r) { MaskedFiles.Add((e, r)); return OnMaskedFile?.Invoke(e, r) ?? Task.CompletedTask; }
+    public Task Deploy(CommandEnvelope e, DeployCommand c) { Deploys.Add((e, c)); return OnDeploy?.Invoke(e, c) ?? Task.CompletedTask; }
+    public Task RollbackRun(CommandEnvelope e, RollbackCommand c) { Rollbacks.Add((e, c)); return OnRollback?.Invoke(e, c) ?? Task.CompletedTask; }
     public Task Disconnect(string reason) { Disconnects.Add(reason); return Task.CompletedTask; }
 }
 

@@ -13,6 +13,13 @@ public sealed class SampleInspector : IIisInspector
     public DiscoveryResult Collect(Guid commandId)
     {
         var now = DateTimeOffset.UtcNow;
+        if (SampleSites.Load() is { } configured)
+            return new DiscoveryResult(commandId, now, true,
+                configured.Select(c => new DiscoveredSite(c.Id, c.Name, "Started", c.Path, c.Pool,
+                    [new DiscoveredBinding("http", "*", c.Port, c.Host, null)],
+                    [new DiscoveredApplication("/", c.Path, c.Pool, [new DiscoveredVirtualDirectory("/", c.Path)])])).ToList(),
+                configured.Select(c => c.Pool).Distinct().Select(p => new DiscoveredAppPool(p, "ApplicationPoolIdentity", "v4.0", "Integrated", "Started")).ToList(),
+                [], [new DiscoveredDotNetVersion(".NET Framework", "4.8")]);
         DiscoveredSite Site(long id, string name, string path, string pool, string host) => new(id, name, "Started", path, pool,
             [new DiscoveredBinding("http", "*", 80, host, null), new DiscoveredBinding("https", "*", 443, host, "AABBCCDDEEFF00112233445566778899AABBCCDD")],
             [new DiscoveredApplication("/", path, pool, [new DiscoveredVirtualDirectory("/", path)]),

@@ -3,6 +3,7 @@ using IisControlCenter.Agent.Iis;
 using IisControlCenter.Agent.Security;
 using IisControlCenter.Contracts;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace IisControlCenter.Agent;
 
@@ -15,8 +16,10 @@ public sealed class AgentWorker(
     CommandPolicy policy,
     IIisInspector iis,
     TimeProvider clock,
+    IServiceProvider services,
     ILogger<AgentWorker> log) : BackgroundService
 {
+    private IisControlCenter.Agent.Deploy.RunCoordinator? _runs;
     private static readonly TimeSpan HeartbeatEvery = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RetryAfterRejection = TimeSpan.FromMinutes(5);
     private HubConnection? _hub;
@@ -32,6 +35,11 @@ public sealed class AgentWorker(
         _cert = AgentCertificates.Load(config.CertThumbprint);
         _hub = BuildConnection(_cert);
         Wire(_hub);
+
+        var channel = new IisControlCenter.Agent.Deploy.HubPortalChannel(config, () => _hub, () => _cert);
+        _runs = ActivatorUtilities.CreateInstance<IisControlCenter.Agent.Deploy.RunCoordinator>(services, (IisControlCenter.Agent.Deploy.IPortalChannel)channel);
+        try { _runs.RecoverAfterRestart(ct); }       // undo any deployment that was cut off by a crash or reboot
+        catch (Exception ex) { log.LogError(ex, "Recovery after restart failed"); }
 
         var attempt = 0;
         while (!ct.IsCancellationRequested && !_stop)
@@ -51,6 +59,7 @@ public sealed class AgentWorker(
                     }
                     log.LogInformation("Connected to portal.");
                     if (await TryRenewCertificateAsync(ct)) continue;   // reconnect right away with the new certificate
+                    _ = _runs!.ResendUnconfirmedAsync(ct);               // results the portal has not confirmed yet
                 }
                 else if (_hub.State == HubConnectionState.Connected)
                 {
@@ -141,6 +150,10 @@ public sealed class AgentWorker(
     {
         hub.On<CommandEnvelope>(nameof(IAgentClient.RunDiscovery), e => _ = HandleDiscoveryAsync(e));
         hub.On<CommandEnvelope>(nameof(IAgentClient.Ping), e => HandlePing(e));
+        hub.On<CommandEnvelope, ManifestRequest>(nameof(IAgentClient.GetManifest), (e, r) => _ = Guard(() => _runs!.HandleManifestAsync(e, r, _stopping.Token), "manifest"));
+        hub.On<CommandEnvelope, MaskedFileRequest>(nameof(IAgentClient.GetMaskedFile), (e, r) => _ = Guard(() => _runs!.HandleMaskedFileAsync(e, r, _stopping.Token), "masked file"));
+        hub.On<CommandEnvelope, DeployCommand>(nameof(IAgentClient.Deploy), (e, c) => _ = Guard(() => _runs!.HandleDeployAsync(e, c, _stopping.Token), "deploy"));
+        hub.On<CommandEnvelope, RollbackCommand>(nameof(IAgentClient.RollbackRun), (e, c) => _ = Guard(() => _runs!.HandleRollbackAsync(e, c, _stopping.Token), "rollback"));
         hub.On<string>(nameof(IAgentClient.Disconnect), reason =>
         {
             log.LogWarning("Portal asked this agent to disconnect: {Reason}. Not reconnecting until the service restarts.", reason);
@@ -153,6 +166,21 @@ public sealed class AgentWorker(
             catch (Exception ex) { log.LogWarning(ex, "Hello after reconnect failed"); }
         };
         hub.Closed += ex => { log.LogInformation("Disconnected: {Message}", ex?.Message ?? "closed"); return Task.CompletedTask; };
+    }
+
+    private readonly CancellationTokenSource _stopping = new();
+
+    private async Task Guard(Func<Task> work, string what)
+    {
+        try { await work(); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { log.LogError(ex, "Handling {What} failed", what); }
+    }
+
+    public override Task StopAsync(CancellationToken cancellationToken)
+    {
+        _stopping.Cancel();          // an interrupted deployment is restored by the journal when the agent starts again
+        return base.StopAsync(cancellationToken);
     }
 
     private async Task<bool> HelloAsync(CancellationToken ct) =>
