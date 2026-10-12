@@ -36,7 +36,12 @@ Also done in this phase (promised in the Phase 1 notes): **agent certificate ren
 | Agent renewal timing, including the loop found in the manual run | 6 new agent tests |
 | Whole flow in a real browser against the real portal and a real agent over mutual TLS | manual run (Linux, fake IIS data): approve server, create projects and components, map from a suggestion, pool exception with reason, members, self-approval switch, certificate renewal, IIS changed behind the portal's back -> Missing -> drift list -> accept |
 | Phase 1 items on Windows | **GitHub Actions run 1 passed**: 6 IIS integration tests on real IIS (Windows Server 2025), single-file agent reading IIS, installer validation |
-| New in this phase | CI job "Real install on Windows": runs the real installer in Windows PowerShell 5.1, creates the service and local account, mutual TLS to a portal on the runner, approval, discovery, restart, uninstall |
+| Real install on Windows (**passed, run 4**) | CI job on Windows Server 2025: real installer in Windows PowerShell 5.1, local service account created and made administrator, service running as that account, config folder locked to administrators, registration over real mutual TLS (portal on Kestrel, certificate from the Windows store, two host names on one port), agent shows Pending, wrong-environment approval refused, approve, ReadOnly start, discovery of the real IIS, service restart reconnects with the stored certificate, second install refused, uninstall |
+
+## Bugs found by the real Windows install (fixed)
+
+- The installer created the local service account with a 49-character description; Windows allows 48. It would have failed on every non-domain server. The installer now also explains how to recover when it fails after registering.
+- The CI portal was killed when its step ended (CI problem, not a product problem).
 
 ## Bugs found by the manual run (fixed)
 
@@ -57,6 +62,8 @@ Also done in this phase (promised in the Phase 1 notes): **agent certificate ren
 
 ## Still unverified
 
+- **gMSA installs** (domain servers): the CI machine is not domain joined, so only the local-account path ran for real.
+- **The installer under an AV/EDR product** and on servers with hardened policies (for example 'log on as a service' managed by Group Policy, which can overwrite what the script sets).
 - SQL Server (migrations were generated, never applied; tests use SQLite, where text matching is case-sensitive).
 - Entra sign-in, Hangfire, Kestrel loading the server certificate from the Windows store (the new CI job covers the last one on a Windows runner).
 - Anything Phase 3 or 4: deployments and IIS changes do not exist yet.
