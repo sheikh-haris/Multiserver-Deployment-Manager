@@ -112,8 +112,15 @@ else if (_view is not null)
                             @foreach (var pp in c.ProtectedPaths)
                             {
                                 var ppc = pp;
-                                <MudChip T="string" Size="Size.Small" Color="@(pp.Kind == ProtectedPathKind.DataFolder ? Color.Error : Color.Default)" Variant="Variant.Outlined"
-                                         OnClose="@(_view.CanManage && !pp.IsDefault ? (() => RemovePath(c, ppc)) : null)">@(pp.Kind == ProtectedPathKind.DataFolder ? "data" : "config"): @pp.Path</MudChip>
+                                @if (_view.CanManage && !pp.IsDefault)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="@(pp.Kind == ProtectedPathKind.DataFolder ? Color.Error : Color.Default)" Variant="Variant.Outlined"
+                                             OnClose="@(() => RemovePath(c, ppc))">@(pp.Kind == ProtectedPathKind.DataFolder ? "data" : "config"): @pp.Path</MudChip>
+                                }
+                                else
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="@(pp.Kind == ProtectedPathKind.DataFolder ? Color.Error : Color.Default)" Variant="Variant.Outlined">@(pp.Kind == ProtectedPathKind.DataFolder ? "data" : "config"): @pp.Path</MudChip>
+                                }
                             }
                             @if (_view.CanManage)
                             {

@@ -36,7 +36,7 @@ public class DeploymentServiceTests : IDisposable
         Assert.False(det.Request.IsDirectToProd);
         await using var db = d.E.Db.CreateDbContext();
         Assert.Contains("web.config", (await db.RequestTargets.SingleAsync()).SnapshotJson);
-        Assert.Single(d.Store.ReadChanges(r.Value, d.TargetId).Where(c => c.Action == FileAction.SkipProtectedConfig));
+        Assert.Single(d.Store.ReadChanges(r.Value, d.TargetId), c => c.Action == FileAction.SkipProtectedConfig);
     }
 
     [Fact]

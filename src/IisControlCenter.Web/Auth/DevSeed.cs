@@ -13,6 +13,10 @@ public static class DevSeed
         ("operator", "dev-operator", "Dev Operator (Server Operator, Dev only)"),
         ("auditor", "dev-auditor", "Dev Auditor"),
         ("nobody", "dev-nobody", "Dev User (no roles)"),
+        // Project roles for these are granted per project by the automated tests (/dev/e2e/grant) or by an admin on the project page.
+        ("deployer", "dev-deployer", "Dev Deployer (project role)"),
+        ("approver", "dev-approver", "Dev Approver (project role)"),
+        ("approver2", "dev-approver2", "Dev Approver 2 (project role)"),
     ];
 
     public static async Task RunAsync(AppDbContext db)

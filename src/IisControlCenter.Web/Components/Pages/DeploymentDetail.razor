@@ -37,7 +37,7 @@ else if (_d is not null)
     }
     @if (!string.IsNullOrEmpty(r.StatusDetail) && r.Status is not (RequestStatus.Submitted or RequestStatus.Approved or RequestStatus.Succeeded))
     {
-        <MudAlert Severity="@(r.Status is RequestStatus.NeedsReapproval ? Severity.Warning : Severity.Info)" Class="mb-3">@r.StatusDetail</MudAlert>
+        <MudAlert Severity="@(r.Status is RequestStatus.NeedsReapproval or RequestStatus.RolledBack ? Severity.Warning : r.Status == RequestStatus.Failed ? Severity.Error : Severity.Info)" Class="mb-3">@r.StatusDetail</MudAlert>
     }
     @if (r.Status == RequestStatus.Approved && r.StatusDetail?.StartsWith("Waiting") == true) { <MudAlert Severity="Severity.Warning" Class="mb-3">@r.StatusDetail</MudAlert> }
 
@@ -50,7 +50,7 @@ else if (_d is not null)
                         <tr><td>Requested by</td><td>@r.RequestedBy, @r.RequestedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td></tr>
                         @if (r.Type == RequestType.Deploy) { <tr><td>Source</td><td>@r.SourceReference</td></tr> }
                         @if (!string.IsNullOrWhiteSpace(r.Notes)) { <tr><td>@(r.Type == RequestType.Rollback ? "Reason" : "Notes")</td><td style="white-space:pre-wrap">@r.Notes</td></tr> }
-                        <tr><td>Package</td><td>@_d.Package.FileName <span class="mono">(@_d.Package.Sha256[..16]…)</span>, @(_d.Package.Size / 1024) KB, @_d.Package.EntryCount files, virus scan: @_d.Package.AvResult</td></tr>
+                        <tr><td>Package</td><td>@_d.Package.FileName <span class="mono">(@_d.Package.Sha256[..16]…)</span>, @Bytes(_d.Package.Size), @_d.Package.EntryCount files, virus scan: @(_d.Package.AvResult == AvResult.ScanOnTarget ? "on each target server" : _d.Package.AvResult.ToString())</td></tr>
                         @if (r.PromotedFromRequestId is { } pf) { <tr><td>Promoted from</td><td><MudLink Href="@($"/deployments/{pf}")">Staging request</MudLink> (same package, succeeded)</td></tr> }
                         @if (!string.IsNullOrEmpty(r.SingleServerReason)) { <tr><td>Only some servers</td><td>@r.SingleServerReason</td></tr> }
                         @if (r.ScheduledAt is { } s) { <tr><td>Scheduled</td><td>@s.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td></tr> }
@@ -185,6 +185,7 @@ else { <MudProgressLinear Indeterminate="true" /> }
 
 @code {
     [Parameter] public Guid Id { get; set; }
+    private static string Bytes(long n) => n < 1024 ? n + " B" : n < 1024 * 1024 ? (n / 1024.0).ToString("0.#") + " KB" : (n / 1024.0 / 1024).ToString("0.#") + " MB";
     private Actor? _actor;
     private RequestDetail? _d;
     private bool _loaded, _busy;

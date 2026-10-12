@@ -93,7 +93,7 @@ public class RunCoordinatorTests : IDisposable
         await rc.HandleDeployAsync(Env(), cmd, default);                          // the portal retries the same run
         Assert.Equal(2, ch.Completed.Count);                                      // result sent again
         Assert.Equal("someone changed it later", h.Read("index.html"));           // NOT deployed again
-        Assert.Equal(1, h.Pools.Restarted.Count);
+        Assert.Single(h.Pools.Restarted);
     }
 
     [Fact]

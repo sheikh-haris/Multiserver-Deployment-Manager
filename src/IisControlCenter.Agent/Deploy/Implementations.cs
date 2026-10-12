@@ -87,7 +87,14 @@ public sealed class LocalHealthChecker : IHealthChecker
 
 public sealed class DefenderAgentAntivirus : IAgentAntivirus
 {
-    public Task<ScanResult> ScanAsync(string file, CancellationToken ct) => DefenderScanner.ScanFileAsync(file, TimeSpan.FromMinutes(15), ct);
+    public Task<ScanResult> ScanAsync(string file, CancellationToken ct)
+    {
+#if DEBUG
+        // Development machines without Defender (the Linux browser smoke test). Not compiled into Release builds.
+        if (Environment.GetEnvironmentVariable("ICC_DEV_SKIP_SCAN") == "1") return Task.FromResult(new ScanResult(ScanOutcome.Clean, "scan skipped (development)"));
+#endif
+        return DefenderScanner.ScanFileAsync(file, TimeSpan.FromMinutes(15), ct);
+    }
 }
 
 /// <summary>Fetches the plan input of a run and the path list of a manifest request from the portal over HTTPS.</summary>

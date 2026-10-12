@@ -71,7 +71,7 @@ public sealed class DeployEnv : IDisposable
         Store = new FilePackageStore(Path.Combine(Root, "store"));
         var opts = Microsoft.Extensions.Options.Options.Create(Options);
         Pending = new PendingAgentResults(E.Clock);
-        Diff = new DiffService(Store, E.Commands, Pending, opts);
+        Diff = new DiffService(Store, E.Commands, Pending);
         Protected = new ProtectedListService(E.Db, E.Audit, E.Clock);
         Notify = new NotificationService(E.Db, Email, opts, E.Clock, Microsoft.Extensions.Logging.Abstractions.NullLogger<NotificationService>.Instance);
         Svc = new DeploymentService(E.Db, Diff, Store, Protected, E.Audit, Notify, Bus, opts, E.Clock);

@@ -75,7 +75,7 @@ else
                         <tr style="cursor:pointer" @onclick="() => _package = p">
                             <td><MudRadioGroup T="Guid" Value="_package?.Id ?? Guid.Empty"><MudRadio T="Guid" Value="p.Id" /></MudRadioGroup></td>
                             <td>@p.FileName</td><td>@p.UploadedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td><td>@p.UploadedBy</td>
-                            <td>@(p.Size / 1024) KB</td><td>@p.EntryCount</td><td>@p.AvResult</td><td class="mono">@p.Sha256[..12]…</td>
+                            <td>@(p.Size < 1024 ? p.Size + " B" : (p.Size / 1024) + " KB")</td><td>@p.EntryCount</td><td>@(p.AvResult == AvResult.ScanOnTarget ? "on target server" : p.AvResult.ToString())</td><td class="mono">@p.Sha256[..12]…</td>
                         </tr>
                     }
                     </tbody>

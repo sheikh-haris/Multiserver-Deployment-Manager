@@ -124,6 +124,8 @@ jobs:
           set Portal__AgentsHost=agents.test
           set Portal__HttpsPort=8443
           set ConnectionStrings__Default=Data Source=$PWD\e2e.db
+          set Deployments__PackageStorePath=$PWD\packages
+          set Deployments__HealthTimeoutSeconds=10
           dotnet IisControlCenter.Web.dll > "$PWD\portal.log" 2> "$PWD\portal.err"
           "@ | Set-Content -Path "$PWD\run-portal.cmd" -Encoding ascii
           schtasks /Create /TN icc-portal /TR "cmd /c $PWD\run-portal.cmd" /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F | Out-Host
@@ -150,6 +152,17 @@ jobs:
           .\installer\Install-Agent.ps1 -PortalUrl https://agents.test:8443 -Token $env:REG_TOKEN -Environment Dev -AllowedRoots 'C:\Websites' -AgentExePath .\publish\agent\IisControlCenter.Agent.exe
           $svc = Get-Service IisControlCenterAgent
           if ($svc.Status -ne 'Running') { throw "Service is $($svc.Status)" }
+
+      - name: Create two IIS sites for the deployment test
+        shell: pwsh
+        run: |
+          Import-Module WebAdministration
+          foreach ($x in @(@('ci-app', 8081), @('ci-bad', 8082))) {
+            $dir = "C:\Websites\$($x[0])"; New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            New-WebAppPool -Name $x[0]
+            New-Website -Name $x[0] -PhysicalPath $dir -Port $x[1] -ApplicationPool $x[0] | Out-Null
+          }
+          Get-Website | Format-Table Name, Id, PhysicalPath | Out-String | Write-Host
 
       - name: Agent shows as Pending, then approve it
         shell: pwsh
@@ -192,6 +205,10 @@ jobs:
           $s = $null
           foreach ($i in 1..60) { Start-Sleep -Seconds 1; $s = Invoke-RestMethod "https://portal.test:8443/dev/e2e/status?serverId=$env:SERVER_ID"; if ($s.agentStatus -eq 'Online') { break } }
           if ($s.agentStatus -ne 'Online') { throw "After restart: $($s.agentStatus)" }
+
+      - name: Deploy through the portal, the installed agent and real IIS
+        shell: pwsh
+        run: ./tests/Smoke/Windows-Deploy-E2E.ps1
 
       - name: Installer refuses a second install and uninstalls cleanly
         shell: powershell

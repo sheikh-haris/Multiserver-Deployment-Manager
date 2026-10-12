@@ -258,6 +258,54 @@ if (authMode == "Dev" && isDev)
         var r = await svc.ApproveAsync(E2EActor(clock), serverId, environment);
         return r.Ok ? Results.Ok() : Results.BadRequest(r.Error);
     }).AllowAnonymous();
+    app.MapPost("/dev/e2e/project", async (string name, string? health, ProjectService projects, TimeProvider clock) =>
+    {
+        var a = E2EActor(clock);
+        var p = await projects.CreateAsync(a, name, null, null, null);
+        if (!p.Ok) return Results.BadRequest(p.Error);
+        var c = await projects.AddComponentAsync(a, p.Value, "Web", "Web", health ?? "/", null, false);
+        return c.Ok ? Results.Ok(new { projectId = p.Value, componentId = c.Value }) : Results.BadRequest(c.Error);
+    }).AllowAnonymous();
+    app.MapPost("/dev/e2e/link", async (Guid componentId, Guid serverId, long siteId, string? appPath, TargetService targets, TimeProvider clock) =>
+    {
+        var r = await targets.LinkAsync(E2EActor(clock), componentId, serverId, siteId, appPath ?? "/");
+        return r.Ok ? Results.Ok(new { targetId = r.Value }) : Results.BadRequest(r.Error);
+    }).AllowAnonymous();
+    app.MapPost("/dev/e2e/grant", async (string persona, Guid projectId, string role, string env, MembershipService members, TimeProvider clock) =>
+    {
+        var p = DevSeed.Personas.FirstOrDefault(x => x.Key == persona);
+        if (p.Key is null || !Enum.TryParse<Role>(role, out var rl)) return Results.BadRequest("unknown persona or role");
+        var r = await members.GrantAsync(E2EActor(clock), projectId, PrincipalType.User, p.Oid, p.Name, rl, env, DateTimeOffset.UtcNow.AddDays(30));
+        return r.Ok ? Results.Ok() : Results.BadRequest(r.Error);
+    }).AllowAnonymous();
+    static async Task<Actor> PersonaActor(string persona, AccessService access)
+    {
+        var p = DevSeed.Personas.First(x => x.Key == persona);
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("oid", p.Oid), new Claim("name", p.Name)], "dev", "name", ClaimTypes.Role));
+        var u = UserClaims.ToContext(principal);
+        return new Actor(u.UserId, u.DisplayName, null, await access.GetEvaluatorAsync(principal), persona + "@dev.local");
+    }
+    // These two call the real services with a real permission check, as the given persona (the browser UI does the same through the pages).
+    app.MapPost("/dev/e2e/submit", async (string persona, Guid componentId, string env, Guid packageId, Guid targetId, string source, DeploymentService deployments, AccessService access) =>
+    {
+        var r = await deployments.SubmitAsync(await PersonaActor(persona, access),
+            new SubmitCommand(componentId, env, packageId, [targetId], IisControlCenter.Contracts.Deployments.DeployMode.Overlay, source, null, null, null, [], null));
+        return r.Ok ? Results.Ok(new { requestId = r.Value }) : Results.BadRequest(r.Error);
+    }).AllowAnonymous();
+    app.MapPost("/dev/e2e/approve-request", async (string persona, Guid id, DeploymentService deployments, AccessService access) =>
+    {
+        var r = await deployments.ApproveAsync(await PersonaActor(persona, access), id);
+        return r.Ok ? Results.Ok() : Results.BadRequest(r.Error);
+    }).AllowAnonymous();
+    app.MapGet("/dev/e2e/request", async (Guid id, IDbContextFactory<AppDbContext> dbf) =>
+    {
+        await using var db = await dbf.CreateDbContextAsync();
+        var r = await db.DeploymentRequests.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id);
+        if (r is null) return Results.NotFound();
+        var runs = await db.DeploymentRuns.AsNoTracking().Where(x => x.RequestId == id).OrderBy(x => x.Sequence)
+            .Select(x => new { x.Status, x.CurrentStep, x.FailureStep, x.Message, x.HealthDetail, x.BackupId }).ToListAsync();
+        return Results.Ok(new { status = r.Status.ToString(), detail = r.StatusDetail, selfApproved = r.SelfApproved, direct = r.IsDirectToProd, runs });
+    }).AllowAnonymous();
     app.MapGet("/dev/e2e/status", async (Guid serverId, IDbContextFactory<AppDbContext> dbf) =>
     {
         await using var db = await dbf.CreateDbContextAsync();

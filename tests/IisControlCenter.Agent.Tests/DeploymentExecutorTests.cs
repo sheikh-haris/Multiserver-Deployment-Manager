@@ -386,7 +386,7 @@ public class DeploymentExecutorTests : IDisposable
         h.Pools.ShouldFail = n => n >= 2;       // deploy restart works, restore restart fails
         var r = await h.Deploy(h.Command(NewVersion()));
         Assert.Equal(RunResults.RollbackFailed, r.Result);
-        Assert.Contains("NEEDS A PERSON".ToLowerInvariant(), r.Message.ToLowerInvariant().Replace("needs a person", "NEEDS A PERSON".ToLowerInvariant()));
+        Assert.Contains("needs a person", r.Message?.ToLowerInvariant());
         Assert.Contains("RESTORE FAILED", r.Message);
     }
 

@@ -4,7 +4,6 @@ using IisControlCenter.Contracts.Deployments;
 using IisControlCenter.Core.Deployments;
 using IisControlCenter.Core.Domain;
 using IisControlCenter.Web.Agents;
-using Microsoft.Extensions.Options;
 
 namespace IisControlCenter.Web.Deployments;
 
@@ -28,8 +27,7 @@ public sealed record MaskedFileDiff(string Path, bool Ok, string? Error, string?
 public sealed class DiffService(
     IPackageStore store,
     AgentCommandService commands,
-    PendingAgentResults pending,
-    IOptions<DeploymentOptions> options)
+    PendingAgentResults pending)
 {
     private static readonly TimeSpan AgentTimeout = TimeSpan.FromSeconds(90);
 
