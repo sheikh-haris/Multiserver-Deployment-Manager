@@ -1,6 +1,23 @@
 # IIS Control Center — Design Document (v0.1, for approval)
 
-Status: **Draft. No code written. Waiting for your approval and answers in section 12.**
+Status: **v0.2. No code written. Waiting for your written approval (section 14).**
+
+---
+
+## 0A. Decisions made (v0.2) — these override anything below that disagrees
+
+| # | Decision |
+|---|---|
+| D1 | **Local-config model accepted.** The installer fixes environment and allowed root folders (e.g. `D:\Websites`) in a local file on each server. The agent only works inside them. Changing them needs a re-run of the installer on that server. |
+| D2 | **Agent hostname:** two DNS names, both on port 443. `portal.<domain>` for people, `agents.<domain>` for agents (client certificate required only on the agents name). |
+| D3 | **No certificate management in the portal.** No PFX upload, no HTTPS binding. Certificates are discovered read-only (for the expiry report). Phase 4 creates HTTP bindings only; HTTPS bindings stay in IIS Manager. |
+| D4 | **Approver** is an ordinary role assigned in the admin panel per project and environment. Only a Platform Admin can assign it. |
+| D5 | **Self-approval is a setting** per project and environment. Default off. Platform Admin can switch it on. Every self-approved request is badged **Self-approved**, and **every** approval, with or without self-approval, is audited. A report lists self-approved deployments (Production first). |
+| D6 | **Portal host:** Windows Server. Defender exists but the portal account has no admin rights (see D7). |
+| D7 | **Antivirus:** Phase 3 first tests whether the portal's low-rights account can run a Defender custom scan (`MpCmdRun`). If yes, scan at upload. If not, the **agent** scans the package with the server's Defender before extraction, and the request shows "scanned on target". Either way, a failed scan blocks deployment. This is untested until Phase 3. |
+| D8 | **Package storage:** a local folder on the portal server (path in settings), outside any web root, with free-space alert. You must size and back up that disk. |
+| D9 | **No Windows test server.** IIS code sits behind interfaces; business logic is unit-tested with fakes. A Windows-only integration test project is shipped and run via GitHub Actions on a Windows runner with IIS enabled (Phase 1 task). Anything IIS-related is "unverified" until that passes. |
+| D10 | **Remaining open questions (7, 8, 9, 10, 12, 14, 15) use my defaults** unless you object: Approver on Dev/Staging = Platform Admin only; `RequiresStagingBeforeProd` default off; protected-list shortening = Platform Admin only, audited; Entra ID with Graph group read; SMTP details set later in Admin; default naming as in the brief. |
 
 ---
 
@@ -283,7 +300,7 @@ Every command carries: `CommandId` (GUID, idempotency key), `IssuedAt`, `Expires
 - Users: Entra ID OIDC (or AD via the same abstraction). Roles from group claims. If a user is in too many groups for the token (> 200), the portal falls back to a Graph lookup.
 - One `IAccessEvaluator` in `Core`: `Can(user, action, resource)`. Deny by default. Used by UI, services and the execution-time check. No permission logic in components.
 - Platform rights and project rights are checked by separate methods and can never satisfy each other.
-- Grant rules in code: Project Owner → up to Deployer; Approver → Platform Admin only; individual (non-group) grants must have an expiry; self-approval always blocked; every grant, change, removal and expiry audited.
+- Grant rules in code: Project Owner → up to Deployer; Approver → Platform Admin only; individual (non-group) grants must have an expiry; self-approval blocked unless the project/environment setting allows it (D5), and always audited and badged; every grant, change, removal and expiry audited.
 
 ### 7.3 Agent-side enforcement (even if portal is compromised)
 - Fixed command set. No generic "run" anywhere.
@@ -302,7 +319,7 @@ At approval, the portal creates a manifest (request id, package hash, target ids
 - Max size (default 500 MB), enforced on session start and per chunk.
 - Zip checks: no `..`, no absolute paths, no drive letters, no ADS (`:`), no reserved device names, no duplicate names that differ only by case, max entry count and max uncompressed size, and a compression-ratio limit (zip-bomb protection). These limits are not in the brief; I add them with configurable defaults.
 - Blocked extensions: `.exe .bat .cmd .ps1 .msi` unless the component allows them.
-- Defender scan; `Infected` or scan error blocks submission.
+- Antivirus scan per D7 (portal-side if permitted, otherwise agent-side). `Infected` or scan error blocks submission.
 - Stored by hash; retention job in Hangfire; download = Platform Admin only and audited.
 - Packages stored outside any web root.
 
@@ -399,3 +416,7 @@ Test environment needed from you: one Windows Server with IIS (a throwaway VM) a
 ## 13. Next step
 
 Answer section 12 (short answers are fine; "your default" is acceptable). Then I start Phase 1 and stop for your review at the end of it.
+
+## 14. Approval
+
+Reply "approved" (or list changes) and I start Phase 1: solution structure, Entra login and roles, server registration, agent connection, read-only discovery, discovery report, installer script v1, and the GitHub Actions Windows/IIS test job.
