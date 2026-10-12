@@ -114,15 +114,22 @@ jobs:
       - name: Start the portal (Development mode, SQLite, two host names on one port)
         shell: pwsh
         run: |
-          $env:ASPNETCORE_ENVIRONMENT = 'Development'
-          $env:Portal__Tls__Thumbprint = $env:THUMB
-          $env:Portal__AgentsHost = 'agents.test'
-          $env:Portal__HttpsPort = '8443'
-          $env:ConnectionStrings__Default = "Data Source=$PWD\e2e.db"
-          $p = Start-Process dotnet -ArgumentList 'IisControlCenter.Web.dll' -WorkingDirectory "$PWD\publish\web" -RedirectStandardOutput "$PWD\portal.log" -RedirectStandardError "$PWD\portal.err" -PassThru
-          "PORTAL_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # A process started directly from a step is killed when the step ends, so run it as a scheduled task (SYSTEM).
+          $web = "$PWD\publish\web"
+          @"
+          @echo off
+          cd /d "$web"
+          set ASPNETCORE_ENVIRONMENT=Development
+          set Portal__Tls__Thumbprint=$env:THUMB
+          set Portal__AgentsHost=agents.test
+          set Portal__HttpsPort=8443
+          set ConnectionStrings__Default=Data Source=$PWD\e2e.db
+          dotnet IisControlCenter.Web.dll > "$PWD\portal.log" 2> "$PWD\portal.err"
+          "@ | Set-Content -Path "$PWD\run-portal.cmd" -Encoding ascii
+          schtasks /Create /TN icc-portal /TR "cmd /c $PWD\run-portal.cmd" /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F | Out-Host
+          schtasks /Run /TN icc-portal | Out-Host
           $ok = $false
-          foreach ($i in 1..60) {
+          foreach ($i in 1..90) {
             try { if ((Invoke-RestMethod https://portal.test:8443/healthz) -eq 'ok') { $ok = $true; break } } catch { Start-Sleep -Seconds 1 }
           }
           if (-not $ok) { Get-Content portal.log, portal.err -ErrorAction SilentlyContinue | Write-Host; throw 'Portal did not start.' }
@@ -198,9 +205,13 @@ jobs:
       - name: Logs (always)
         if: always()
         shell: pwsh
+        continue-on-error: true
         run: |
+          $ErrorActionPreference = 'Continue'
           Write-Host '--- portal.log'; Get-Content portal.log -Tail 80 -ErrorAction SilentlyContinue
           Write-Host '--- portal.err'; Get-Content portal.err -Tail 40 -ErrorAction SilentlyContinue
           Write-Host '--- agent event log'
-          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'IisControlCenterAgent' } -MaxEvents 40 -ErrorAction SilentlyContinue | Format-List TimeCreated, LevelDisplayName, Message | Out-String | Write-Host
-          if ($env:PORTAL_PID) { Stop-Process -Id $env:PORTAL_PID -Force -ErrorAction SilentlyContinue }
+          wevtutil qe Application "/q:*[System[Provider[@Name='IisControlCenterAgent']]]" /c:40 /rd:true /f:text 2>&1 | Out-Host
+          schtasks /End /TN icc-portal 2>&1 | Out-Null
+          Get-Process dotnet -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          exit 0
