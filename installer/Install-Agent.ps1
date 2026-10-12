@@ -231,54 +231,61 @@ try {
     Remove-Item Env:\ICC_AGENT_CONFIG -ErrorAction SilentlyContinue
 }
 
-Write-Step 'Preparing the service account'
-$cred = $null
-if ($Gmsa) {
-    $account = $Gmsa
-} else {
-    $name = "svc-icc-$($Environment.ToLowerInvariant())"
-    $account = ".\$name"
-    $cred = New-LocalServiceCredential $account
-    $secure = $cred.Password
-    if (Get-LocalUser -Name $name -ErrorAction SilentlyContinue) {
-        Set-LocalUser -Name $name -Password $secure
+try {
+    Write-Step 'Preparing the service account'
+    $cred = $null
+    if ($Gmsa) {
+        $account = $Gmsa
     } else {
-        New-LocalUser -Name $name -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires `
-            -Description "IIS Control Center agent ($Environment). Service use only." | Out-Null
+        $name = "svc-icc-$($Environment.ToLowerInvariant())"
+        $account = ".\$name"
+        $cred = New-LocalServiceCredential $account
+        $secure = $cred.Password
+        if (Get-LocalUser -Name $name -ErrorAction SilentlyContinue) {
+            Set-LocalUser -Name $name -Password $secure
+        } else {
+            New-LocalUser -Name $name -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires `
+                -Description "IIS Control Center agent ($Environment)" | Out-Null   # Windows limits this to 48 characters
+        }
+        Grant-LogonAsService "$env:COMPUTERNAME\$name"
     }
-    Grant-LogonAsService "$env:COMPUTERNAME\$name"
-}
-# The agent needs administrator rights to manage IIS (Microsoft.Web.Administration).
-$member = if ($Gmsa) { $Gmsa } else { "$env:COMPUTERNAME\svc-icc-$($Environment.ToLowerInvariant())" }
-$adminsGroup = (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate([Security.Principal.NTAccount]).Value.Split('\')[1]
-try { Add-LocalGroupMember -Group $adminsGroup -Member $member -ErrorAction Stop }
-catch [Microsoft.PowerShell.Commands.MemberExistsException] { Write-Verbose 'Already a member of the Administrators group.' }
+    # The agent needs administrator rights to manage IIS (Microsoft.Web.Administration).
+    $member = if ($Gmsa) { $Gmsa } else { "$env:COMPUTERNAME\svc-icc-$($Environment.ToLowerInvariant())" }
+    $adminsGroup = (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate([Security.Principal.NTAccount]).Value.Split('\')[1]
+    try { Add-LocalGroupMember -Group $adminsGroup -Member $member -ErrorAction Stop }
+    catch [Microsoft.PowerShell.Commands.MemberExistsException] { Write-Verbose 'Already a member of the Administrators group.' }
 
-Write-Step 'Creating the service'
-if (-not [System.Diagnostics.EventLog]::SourceExists($ServiceName)) { [System.Diagnostics.EventLog]::CreateEventSource($ServiceName, 'Application') }   # works in Windows PowerShell 5.1 and 7
-$binPath = "`"$exe`""
-$env:ICC_AGENT_CONFIG = $null
-if ($Gmsa) {
-    & sc.exe create $ServiceName binPath= $binPath obj= $Gmsa start= delayed-auto DisplayName= 'IIS Control Center Agent' | Out-Null
-    if ($LASTEXITCODE -ne 0) { Fail "sc.exe create failed ($LASTEXITCODE)" }
-} else {
-    New-Service -Name $ServiceName -BinaryPathName $binPath -DisplayName 'IIS Control Center Agent' -StartupType Automatic -Credential $cred | Out-Null
-    & sc.exe config $ServiceName start= delayed-auto | Out-Null
-}
-& sc.exe description $ServiceName 'Connects out to the IIS Control Center portal and runs allow-listed IIS tasks on this server.' | Out-Null
-& sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
-# The service reads its config from the default location (%ProgramData%\IisControlCenter) unless this variable is set machine-wide.
-if ($DataDir -ne (Join-Path $env:ProgramData 'IisControlCenter')) {
-    $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
-    New-ItemProperty -Path $key -Name Environment -PropertyType MultiString -Value @("ICC_AGENT_CONFIG=$configPath") -Force | Out-Null
-}
+    Write-Step 'Creating the service'
+    if (-not [System.Diagnostics.EventLog]::SourceExists($ServiceName)) { [System.Diagnostics.EventLog]::CreateEventSource($ServiceName, 'Application') }   # works in Windows PowerShell 5.1 and 7
+    $binPath = "`"$exe`""
+    $env:ICC_AGENT_CONFIG = $null
+    if ($Gmsa) {
+        & sc.exe create $ServiceName binPath= $binPath obj= $Gmsa start= delayed-auto DisplayName= 'IIS Control Center Agent' | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail "sc.exe create failed ($LASTEXITCODE)" }
+    } else {
+        New-Service -Name $ServiceName -BinaryPathName $binPath -DisplayName 'IIS Control Center Agent' -StartupType Automatic -Credential $cred | Out-Null
+        & sc.exe config $ServiceName start= delayed-auto | Out-Null
+    }
+    & sc.exe description $ServiceName 'Connects out to the IIS Control Center portal and runs allow-listed IIS tasks on this server.' | Out-Null
+    & sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+    # The service reads its config from the default location (%ProgramData%\IisControlCenter) unless this variable is set machine-wide.
+    if ($DataDir -ne (Join-Path $env:ProgramData 'IisControlCenter')) {
+        $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+        New-ItemProperty -Path $key -Name Environment -PropertyType MultiString -Value @("ICC_AGENT_CONFIG=$configPath") -Force | Out-Null
+    }
 
-Write-Step 'Starting the service'
-Start-Service $ServiceName
-Start-Sleep -Seconds 3
-$svc = Get-Service $ServiceName
-Write-Host ("Service status: {0}" -f $svc.Status)
-if ($svc.Status -ne 'Running') { Write-Warning 'The service is not running. Check the Application event log (source IisControlCenterAgent).' }
+    Write-Step 'Starting the service'
+    Start-Service $ServiceName
+    Start-Sleep -Seconds 3
+    $svc = Get-Service $ServiceName
+    Write-Host ("Service status: {0}" -f $svc.Status)
+    if ($svc.Status -ne 'Running') { Write-Warning 'The service is not running. Check the Application event log (source IisControlCenterAgent).' }
+
+} catch {
+    Write-Warning "Setup failed AFTER the agent registered: $($_.Exception.Message)"
+    Write-Warning 'The one-time token is used up. In the portal, open the server and create a new registration token (or remove the server), fix the problem above, then run this script again.'
+    throw
+}
 
 Write-Host ''
 Write-Host 'Done. Next steps:' -ForegroundColor Green
