@@ -1,0 +1,327 @@
+@page "/deployments/new"
+@attribute [Authorize]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject DeploymentService Deployments
+@inject AgentConnectionTracker Tracker
+@inject IJSRuntime Js
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@using System.Text.Json
+@using IisControlCenter.Contracts.Deployments
+@using IisControlCenter.Core.Deployments
+@using IisControlCenter.Web.Deployments
+<PageTitle>New deployment</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-2">New deployment</MudText>
+<MudStack Row="true" Class="mb-4" Wrap="Wrap.Wrap">
+    @foreach (var (n, title) in new[] { (1, "What"), (2, "Package"), (3, "How"), (4, "Review") })
+    {
+        <MudChip T="string" Color="@(_step == n ? Color.Primary : _step > n ? Color.Success : Color.Default)" Variant="@(_step == n ? Variant.Filled : Variant.Outlined)">@n. @title</MudChip>
+    }
+</MudStack>
+
+@if (_choices is null) { <MudProgressLinear Indeterminate="true" /> }
+else if (_choices.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">You do not hold the Deployer role on any component that has a deployment target yet. Ask a Project Owner or Platform Admin.</MudAlert>
+}
+else
+{
+    @if (_step == 1)
+    {
+        <MudPaper Class="pa-4" Outlined="true">
+            <MudSelect T="string" Label="Component and environment" Value="_choiceKey" ValueChanged="PickChoice" Required="true">
+                @foreach (var c in _choices)
+                {
+                    <MudSelectItem T="string" Value="@Key(c)">@c.ProjectName / @c.ComponentName → @c.Environment</MudSelectItem>
+                }
+            </MudSelect>
+            @if (_choice is not null && _choice.Environment == "Prod")
+            {
+                <MudAlert Severity="Severity.Warning" Class="mt-3" Variant="Variant.Outlined">
+                    Production. A package that has not succeeded on Staging first is a <b>direct-to-Production</b> deployment: it needs a reason@(_choice.RequiresStaging ? " and is not allowed for this component (it must go to Staging first)" : ""), and may need two approvers.
+                </MudAlert>
+            }
+        </MudPaper>
+        <MudStack Row="true" Class="mt-3"><MudSpacer /><MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(_choice is null)" OnClick="@(() => _step = 2)">Next</MudButton></MudStack>
+    }
+    else if (_step == 2 && _choice is not null)
+    {
+        <MudPaper Class="pa-4 mb-3" Outlined="true">
+            <MudText Typo="Typo.h6">Upload a package</MudText>
+            <MudText Typo="Typo.body2" Class="mb-2">A .zip of the published application. It is checked and virus-scanned before it can be used. Large files are sent in parts and can resume.</MudText>
+            <input type="file" id="pkg-file" accept=".zip" disabled="@_uploading" />
+            <MudButton Class="ml-2" Variant="Variant.Filled" Color="Color.Primary" Disabled="@_uploading" OnClick="StartUpload" StartIcon="@Icons.Material.Filled.CloudUpload">Upload</MudButton>
+            @if (_uploading || _uploadText is not null)
+            {
+                <MudProgressLinear Value="_uploadPct" Color="Color.Primary" Class="mt-3" />
+                <MudText Typo="Typo.caption">@_uploadText</MudText>
+            }
+            @if (_uploadError is not null) { <MudAlert Severity="Severity.Error" Class="mt-2">@_uploadError</MudAlert>
+                @foreach (var i in _uploadIssues) { <MudText Typo="Typo.caption" Class="d-block mono">@i</MudText> } }
+        </MudPaper>
+
+        <MudPaper Class="pa-4" Outlined="true">
+            <MudText Typo="Typo.h6">Or use a package already uploaded</MudText>
+            @if (_packages.Count == 0) { <MudText Typo="Typo.body2">None yet.</MudText> }
+            else
+            {
+                <MudSimpleTable Dense="true" Hover="true">
+                    <thead><tr><th></th><th>File</th><th>Uploaded</th><th>By</th><th>Size</th><th>Files</th><th>Virus scan</th><th>SHA-256</th></tr></thead>
+                    <tbody>
+                    @foreach (var p in _packages)
+                    {
+                        <tr style="cursor:pointer" @onclick="() => _package = p">
+                            <td><MudRadioGroup T="Guid" Value="_package?.Id ?? Guid.Empty"><MudRadio T="Guid" Value="p.Id" /></MudRadioGroup></td>
+                            <td>@p.FileName</td><td>@p.UploadedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td><td>@p.UploadedBy</td>
+                            <td>@(p.Size / 1024) KB</td><td>@p.EntryCount</td><td>@p.AvResult</td><td class="mono">@p.Sha256[..12]…</td>
+                        </tr>
+                    }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </MudPaper>
+        @foreach (var w in _packageWarnings) { <MudAlert Severity="Severity.Warning" Class="mt-2" Dense="true">@w</MudAlert> }
+        <MudStack Row="true" Class="mt-3"><MudButton OnClick="@(() => _step = 1)">Back</MudButton><MudSpacer />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(_package is null)" OnClick="@(() => _step = 3)">Next</MudButton></MudStack>
+    }
+    else if (_step == 3 && _choice is not null)
+    {
+        <MudPaper Class="pa-4" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-2">Servers</MudText>
+            @foreach (var t in _choice.Targets)
+            {
+                <div>
+                    <MudCheckBox T="bool" Value="_selected.Contains(t.TargetId)" ValueChanged="@(v => Toggle(t.TargetId, v))" Disabled="@(t.Status != TargetStatus.Active)"
+                                 Label="@($"{t.ServerName}: {t.SiteName}{(t.AppPath == "/" ? "" : t.AppPath)}")" />
+                    @if (t.Status != TargetStatus.Active) { <StatusChip Status="@t.Status.ToString()" /> }
+                    @if (!t.AgentOnline) { <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined">agent offline</MudChip> }
+                </div>
+            }
+            @if (_selected.Count > 0 && _selected.Count < _choice.Targets.Count(t => t.Status == TargetStatus.Active))
+            {
+                <MudAlert Severity="Severity.Warning" Class="my-2" Dense="true">Not all servers are selected. Load-balanced servers will run different versions. Write why.</MudAlert>
+                <MudTextField T="string" @bind-Value="_singleReason" Label="Why only some servers?" Immediate="true" Required="true" />
+            }
+
+            <MudDivider Class="my-3" />
+            <MudText Typo="Typo.h6">Mode</MudText>
+            <MudRadioGroup T="DeployMode" @bind-Value="_mode">
+                <MudRadio T="DeployMode" Value="DeployMode.Overlay">Overlay: add and replace files. Nothing is deleted. (Recommended)</MudRadio>
+                <MudRadio T="DeployMode" Value="DeployMode.FullReplace">Full Replace: also delete files that are not in the package.</MudRadio>
+            </MudRadioGroup>
+            @if (_mode == DeployMode.FullReplace)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-1">Full Replace deletes files. Data folders and protected config files are never deleted. A Platform Admin must have confirmed the component's data folders.</MudAlert>
+            }
+
+            <MudDivider Class="my-3" />
+            <MudTextField T="string" @bind-Value="_source" Label="Source reference (commit, branch or work item)" Required="true" Immediate="true" MaxLength="200" />
+            <MudTextField T="string" @bind-Value="_notes" Label="Notes (optional)" Lines="3" Immediate="true" MaxLength="4000" Class="mt-2" />
+            <MudStack Row="true" Class="mt-2" AlignItems="AlignItems.Center">
+                <MudDatePicker Label="Run at (optional)" @bind-Date="_date" MinDate="DateTime.Today" Clearable="true" />
+                <MudTimePicker Label="Time" @bind-Time="_time" Disabled="@(_date is null)" />
+                <MudText Typo="Typo.caption">Local time. Leave empty to run as soon as it is approved.</MudText>
+            </MudStack>
+        </MudPaper>
+        <MudStack Row="true" Class="mt-3"><MudButton OnClick="@(() => _step = 2)">Back</MudButton><MudSpacer />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(_selected.Count == 0 || string.IsNullOrWhiteSpace(_source))" OnClick="GoReview">Review changes</MudButton></MudStack>
+    }
+    else if (_step == 4 && _choice is not null)
+    {
+        @if (_busy) { <MudProgressLinear Indeterminate="true" /><MudText Typo="Typo.caption">Asking the agents what is on the servers now…</MudText> }
+        @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mb-2">@_error</MudAlert> }
+        @if (_preview is not null)
+        {
+            @if (_preview.IsDirectToProd)
+            {
+                <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-2">
+                    DIRECT TO PRODUCTION: this package has not succeeded on Staging. It needs @_preview.ApprovalsRequired approver@(_preview.ApprovalsRequired > 1 ? "s" : "").
+                </MudAlert>
+                <MudTextField T="string" @bind-Value="_directReason" Label="Reason for skipping Staging" Required="true" Immediate="true" Class="mb-2" />
+            }
+            else if (_preview.IsPromote)
+            {
+                <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-2">Promote: this exact package succeeded on Staging.</MudAlert>
+            }
+            @if (_preview.SelfApprovalAllowed) { <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">This project allows self-approval here. If you approve your own request it is marked SELF-APPROVED and audited.</MudAlert> }
+            @if (_mode == DeployMode.FullReplace && !_preview.ProtectedListConfirmed)
+            {
+                <MudAlert Severity="Severity.Error" Class="mb-2">Full Replace is blocked: a Platform Admin must confirm this component's protected data folders first (Project → component → Protected paths).</MudAlert>
+            }
+            @foreach (var t in _preview.Targets)
+            {
+                <MudPaper Outlined="true" Class="pa-3 mb-3">
+                    <MudText Typo="Typo.h6">@t.ServerName <span class="mono" style="font-size:.8em">@t.PhysicalPath</span></MudText>
+                    @if (!t.Ok) { <MudAlert Severity="Severity.Error">@t.Error</MudAlert> }
+                    else
+                    {
+                        <MudStack Row="true" Wrap="Wrap.Wrap" Class="my-1">
+                            <MudChip T="string" Color="Color.Success" Size="Size.Small">@t.Count(FileAction.Add) added</MudChip>
+                            <MudChip T="string" Color="Color.Info" Size="Size.Small">@(t.Count(FileAction.Replace) + t.Count(FileAction.ForceOverwrite)) replaced</MudChip>
+                            <MudChip T="string" Color="Color.Error" Size="Size.Small">@t.Count(FileAction.Delete) deleted</MudChip>
+                            <MudChip T="string" Size="Size.Small">@t.Count(FileAction.Unchanged) unchanged</MudChip>
+                            <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Outlined">@t.Count(FileAction.SkipProtectedConfig) config kept</MudChip>
+                            <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Outlined">@t.Count(FileAction.SkipProtectedData) data skipped</MudChip>
+                        </MudStack>
+                        @if (t.DeletionWarning is not null) { <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Dense="true" Class="my-1">@t.DeletionWarning</MudAlert> }
+                        <FileChangeList Changes="t.Changes" />
+                    }
+                </MudPaper>
+            }
+
+            var keptConfig = _preview.Targets.SelectMany(t => t.Changes).Where(c => c.Action is FileAction.SkipProtectedConfig or FileAction.ForceOverwrite).Select(c => c.Path).Distinct().ToList();
+            @if (keptConfig.Count > 0)
+            {
+                <MudExpansionPanels Class="mb-3">
+                    <MudExpansionPanel Text="@($"Protected config files that exist on the servers ({keptConfig.Count}): kept unless you force them")">
+                        <MudText Typo="Typo.caption">Only do this if the new package really must change that file. The approver sees a before/after with secrets hidden. You must give a reason.</MudText>
+                        @foreach (var f in keptConfig)
+                        {
+                            <MudStack Row="true" AlignItems="AlignItems.Center">
+                                <MudCheckBox T="bool" Value="_forced.ContainsKey(f)" ValueChanged="@(v => ForceToggle(f, v))" Label="@("Overwrite " + f)" />
+                                @if (_forced.ContainsKey(f))
+                                {
+                                    <MudTextField T="string" Value="_forced[f]" ValueChanged="@(v => _forced[f] = v ?? "")" Label="Reason" Immediate="true" Style="min-width:320px" />
+                                }
+                            </MudStack>
+                        }
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="LoadPreview" Disabled="_busy">Update preview</MudButton>
+                    </MudExpansionPanel>
+                </MudExpansionPanels>
+            }
+        }
+        <MudStack Row="true" Class="mt-3"><MudButton OnClick="@(() => _step = 3)">Back</MudButton><MudSpacer />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Send" OnClick="Submit"
+                       Disabled="@(_busy || _preview is null || _preview.Targets.Any(t => !t.Ok))">Submit for approval</MudButton></MudStack>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "component")] public Guid? QueryComponent { get; set; }
+    [SupplyParameterFromQuery(Name = "env")] public string? QueryEnv { get; set; }
+    [SupplyParameterFromQuery(Name = "package")] public Guid? QueryPackage { get; set; }
+
+    private Actor? _actor;
+    private IReadOnlyList<DeployChoice>? _choices;
+    private DeployChoice? _choice;
+    private string? _choiceKey;
+    private int _step = 1;
+    private List<Package> _packages = [];
+    private Package? _package;
+    private List<string> _packageWarnings = [];
+    private readonly HashSet<Guid> _selected = [];
+    private DeployMode _mode;
+    private string? _source, _notes, _singleReason, _directReason;
+    private DateTime? _date; private TimeSpan? _time = new(22, 0, 0);
+    private readonly Dictionary<string, string> _forced = new(StringComparer.OrdinalIgnoreCase);
+    private PreviewResult? _preview;
+    private bool _busy, _uploading;
+    private int _uploadPct; private string? _uploadText, _uploadError;
+    private List<string> _uploadIssues = [];
+    private string? _error;
+    private DotNetObjectReference<NewDeployment>? _ref;
+
+    private static string Key(DeployChoice c) => $"{c.ComponentId}|{c.Environment}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _actor = await Actors.GetAsync();
+        _choices = await Deployments.ChoicesAsync(_actor, Tracker.IsConnected);
+        _ref = DotNetObjectReference.Create(this);
+        if (QueryComponent is { } cid && QueryEnv is { } env && _choices.FirstOrDefault(c => c.ComponentId == cid && c.Environment == env) is { } pre)
+        {
+            await PickChoice(Key(pre));
+            if (QueryPackage is { } pid && _packages.FirstOrDefault(p => p.Id == pid) is { } pk) { _package = pk; _step = 3; }
+            else _step = 2;
+        }
+    }
+
+    private async Task PickChoice(string? key)
+    {
+        _choiceKey = key;
+        _choice = _choices?.FirstOrDefault(c => Key(c) == key);
+        _selected.Clear(); _package = null; _preview = null;
+        if (_choice is null) return;
+        foreach (var t in _choice.Targets.Where(t => t.Status == TargetStatus.Active)) _selected.Add(t.TargetId);
+        _packages = (await Deployments.PackagesAsync(_actor!, _choice.ComponentId, _choice.Environment)).ToList();
+    }
+
+    private void Toggle(Guid id, bool on) { if (on) _selected.Add(id); else _selected.Remove(id); }
+
+    // ----- upload -----
+    private async Task StartUpload()
+    {
+        if (_choice is null) return;
+        _uploading = true; _uploadError = null; _uploadIssues = []; _uploadPct = 0; _uploadText = "Starting…";
+        await Js.InvokeVoidAsync("iccUpload.begin", "pkg-file", _choice.ComponentId, _choice.Environment, _ref);
+    }
+
+    [JSInvokable] public Task OnUploadProgress(int pct, string text) { _uploadPct = pct; _uploadText = text; return InvokeAsync(StateHasChanged); }
+
+    [JSInvokable]
+    public async Task OnUploadDone(string? infoJson, string? error)
+    {
+        _uploading = false;
+        if (error is not null)
+        {
+            _uploadError = error;
+            if (infoJson is not null)
+            {
+                var info = JsonSerializer.Deserialize<UploadInfoDto>(infoJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                _uploadIssues = info?.Errors?.Select(e => $"{e.Path}: {e.Message}").Take(30).ToList() ?? [];
+            }
+        }
+        else if (infoJson is not null)
+        {
+            var info = JsonSerializer.Deserialize<UploadInfoDto>(infoJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+            _packages = (await Deployments.PackagesAsync(_actor!, _choice!.ComponentId, _choice.Environment)).ToList();
+            _package = _packages.FirstOrDefault(p => p.Id == info.PackageId);
+            _packageWarnings = info.Warnings ?? [];
+            if (info.AvText?.StartsWith("ScanOnTarget") == true) _packageWarnings.Add("The portal could not scan this package. Each target server scans it with its own antivirus before deploying.");
+            _uploadText = "Package is ready.";
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private sealed record UploadIssueDto(string Path, string Message);
+    private sealed record UploadInfoDto(Guid? PackageId, List<string>? Warnings, string? AvText, List<UploadIssueDto>? Errors);
+
+    // ----- review -----
+    private SubmitCommand Cmd() => new(_choice!.ComponentId, _choice.Environment, _package!.Id, _selected.ToList(), _mode, _source, _notes,
+        _directReason, _singleReason, _forced.Select(f => new ForcedFileInput(f.Key, f.Value)).ToList(), Schedule());
+
+    private DateTimeOffset? Schedule() => _date is null ? null : new DateTimeOffset(_date.Value.Date + (_time ?? TimeSpan.Zero), TimeZoneInfo.Local.GetUtcOffset(_date.Value.Date + (_time ?? TimeSpan.Zero)));
+
+    private async Task GoReview() { _step = 4; _forced.Clear(); await LoadPreview(); }
+
+    private async Task LoadPreview()
+    {
+        _busy = true; _error = null; StateHasChanged();
+        try
+        {
+            var r = await Deployments.PreviewAsync(_actor!, Cmd());
+            if (r.Ok) _preview = r.Value; else { _preview = null; _error = r.Error; }
+        }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        _busy = false;
+    }
+
+    private void ForceToggle(string path, bool on) { if (on) _forced[path] = ""; else _forced.Remove(path); }
+
+    private async Task Submit()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            var r = await Deployments.SubmitAsync(_actor!, Cmd());
+            if (r.Ok) { Snackbar.Add("Submitted. It now waits for an approver.", Severity.Success); Nav.NavigateTo($"/deployments/{r.Value}"); return; }
+            _error = r.Error;
+        }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        _busy = false;
+    }
+
+    public void Dispose() => _ref?.Dispose();
+}

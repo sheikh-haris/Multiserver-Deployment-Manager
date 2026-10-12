@@ -1,0 +1,12 @@
+<MudDialog>
+    <DialogContent><MudText Class="mb-3">@Message</MudText><MudTextField T="string" @bind-Value="_text" Label="Reason" Lines="3" Immediate="true" Required="true" AutoFocus="true" /></DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@string.IsNullOrWhiteSpace(_text)" OnClick="() => Dialog.Close(DialogResult.Ok(_text))">Request rollback</MudButton>
+    </DialogActions>
+</MudDialog>
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public string? Message { get; set; }
+    private string? _text;
+}

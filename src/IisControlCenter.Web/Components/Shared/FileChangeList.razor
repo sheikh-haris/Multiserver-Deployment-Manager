@@ -1,0 +1,66 @@
+@using IisControlCenter.Contracts.Deployments
+@* A filterable list of the files a deployment will touch. Shows the first 300 matches. *@
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+    <MudSelect T="string" Label="Show" Value="_filter" ValueChanged="@(v => _filter = v ?? "Changes")" Dense="true" Style="max-width:220px">
+        <MudSelectItem T="string" Value="@("Changes")">Changes only</MudSelectItem>
+        <MudSelectItem T="string" Value="@("All")">All files</MudSelectItem>
+        <MudSelectItem T="string" Value="@("Add")">Added</MudSelectItem>
+        <MudSelectItem T="string" Value="@("Replace")">Replaced</MudSelectItem>
+        <MudSelectItem T="string" Value="@("Delete")">Deleted</MudSelectItem>
+        <MudSelectItem T="string" Value="@("Protected")">Protected / kept</MudSelectItem>
+    </MudSelect>
+    <MudTextField T="string" @bind-Value="_text" Placeholder="Search path" Immediate="true" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Style="max-width:260px" />
+    <MudText Typo="Typo.caption">@_shown.Count of @_matches shown</MudText>
+</MudStack>
+<MudSimpleTable Dense="true" Style="max-height:320px; overflow:auto">
+    <thead><tr><th>Action</th><th>Path</th><th>Old</th><th>New</th></tr></thead>
+    <tbody>
+    @foreach (var c in _shown)
+    {
+        <tr>
+            <td><MudChip T="string" Size="Size.Small" Color="@ColorOf(c.Action)" Variant="Variant.Outlined">@Label(c.Action)</MudChip></td>
+            <td class="mono">@c.Path</td>
+            <td>@(c.OldSize is null ? "" : Bytes(c.OldSize.Value))</td>
+            <td>@(c.NewSize is null ? "" : Bytes(c.NewSize.Value))</td>
+        </tr>
+    }
+    </tbody>
+</MudSimpleTable>
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<PlannedChange> Changes { get; set; } = [];
+    private string _filter = "Changes", _text = "";
+    private int _matches;
+    private List<PlannedChange> _shown = [];
+
+    protected override void OnParametersSet() => Refresh();
+    protected override bool ShouldRender() { Refresh(); return true; }
+
+    private void Refresh()
+    {
+        IEnumerable<PlannedChange> q = Changes;
+        q = _filter switch
+        {
+            "Changes" => q.Where(c => c.Action is not FileAction.Unchanged),
+            "Add" => q.Where(c => c.Action == FileAction.Add),
+            "Replace" => q.Where(c => c.Action is FileAction.Replace or FileAction.ForceOverwrite),
+            "Delete" => q.Where(c => c.Action == FileAction.Delete),
+            "Protected" => q.Where(c => c.Action is FileAction.SkipProtectedConfig or FileAction.SkipProtectedData),
+            _ => q,
+        };
+        if (!string.IsNullOrWhiteSpace(_text)) q = q.Where(c => c.Path.Contains(_text.Trim(), StringComparison.OrdinalIgnoreCase));
+        var list = q.ToList();
+        _matches = list.Count;
+        _shown = list.Take(300).ToList();
+    }
+
+    private static string Label(FileAction a) => a switch
+    {
+        FileAction.SkipProtectedConfig => "kept (config)", FileAction.SkipProtectedData => "skipped (data)", FileAction.ForceOverwrite => "FORCED", _ => a.ToString().ToLowerInvariant(),
+    };
+    private static Color ColorOf(FileAction a) => a switch
+    {
+        FileAction.Add => Color.Success, FileAction.Replace => Color.Info, FileAction.Delete => Color.Error, FileAction.ForceOverwrite => Color.Error,
+        FileAction.SkipProtectedConfig or FileAction.SkipProtectedData => Color.Warning, _ => Color.Default,
+    };
+    private static string Bytes(long n) => n < 1024 ? n + " B" : n < 1024 * 1024 ? (n / 1024.0).ToString("0.#") + " KB" : (n / 1024.0 / 1024).ToString("0.#") + " MB";
+}

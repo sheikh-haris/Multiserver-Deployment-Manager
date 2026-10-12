@@ -2,3 +2,10 @@ html, body { font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, s
 #blazor-error-ui { color-scheme: light only; background: lightyellow; bottom: 0; box-shadow: 0 -1px 2px rgba(0,0,0,.2); box-sizing: border-box; display: none; left: 0; padding: .6rem 1.25rem .7rem 1.25rem; position: fixed; width: 100%; z-index: 2000; }
 #blazor-error-ui .dismiss { cursor: pointer; position: absolute; right: .75rem; top: .5rem; }
 .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+.diff { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; white-space: pre-wrap; margin: 0; }
+.diff .add { background: rgba(46,160,67,.18); }
+.diff .del { background: rgba(248,81,73,.18); }
+.diff .gap { color: gray; }
+.runlog { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; background: #111; color: #ddd; padding: 8px; max-height: 360px; overflow: auto; white-space: pre-wrap; }
+.runlog .Warn, .runlog .Warning { color: #f1c40f; }
+.runlog .Error { color: #ff6b6b; }

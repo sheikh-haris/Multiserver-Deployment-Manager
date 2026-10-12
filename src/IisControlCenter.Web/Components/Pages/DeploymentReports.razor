@@ -1,0 +1,77 @@
+@page "/reports/deployments"
+@attribute [Authorize]
+@inject ActorProvider Actors
+@inject DeploymentService Deployments
+@inject NavigationManager Nav
+@using IisControlCenter.Web.Deployments
+<PageTitle>Deployment reports</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-3">Deployment reports</MudText>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+    <MudDatePicker Label="From" @bind-Date="_from" />
+    <MudDatePicker Label="To (included)" @bind-Date="_to" />
+    <MudButton Variant="Variant.Outlined" OnClick="Load">Show</MudButton>
+</MudStack>
+
+@if (_error is not null) { <MudAlert Severity="Severity.Warning">@_error</MudAlert> }
+else if (_direct is not null && _self is not null)
+{
+    <MudText Typo="Typo.h6">Direct-to-Production deployments</MudText>
+    <MudText Typo="Typo.body2" Class="mb-2">Deployments that skipped Staging. Per project and month.</MudText>
+    @if (_direct.Count == 0) { <MudText Class="mb-4">None in this period.</MudText> }
+    else
+    {
+        <MudSimpleTable Dense="true" Hover="true" Class="mb-4" Style="cursor:pointer">
+            <thead><tr><th>Month</th><th>Project</th><th>Component</th><th>By</th><th>Reason</th><th>Approved by</th><th>Status</th></tr></thead>
+            <tbody>
+            @foreach (var g in _direct.GroupBy(r => (r.Month, r.ProjectName)).OrderByDescending(g => g.Key.Month).ThenBy(g => g.Key.ProjectName))
+            {
+                <tr><td colspan="7"><b>@g.Key.Month · @g.Key.ProjectName: @g.Count() deployment(s)</b></td></tr>
+                @foreach (var r in g)
+                {
+                    <tr @onclick="@(() => Nav.NavigateTo($"/deployments/{r.RequestId}"))"><td></td><td></td><td>@r.ComponentName</td><td>@r.RequestedBy</td><td>@r.Reason</td><td>@r.Approvers</td><td><StatusChip Status="@r.Status.ToString()" /></td></tr>
+                }
+            }
+            </tbody>
+        </MudSimpleTable>
+    }
+
+    <MudText Typo="Typo.h6">Self-approved requests</MudText>
+    <MudText Typo="Typo.body2" Class="mb-2">Requests approved by the person who submitted them (allowed per project and environment).</MudText>
+    @if (_self.Count == 0) { <MudText>None in this period.</MudText> }
+    else
+    {
+        <MudSimpleTable Dense="true" Hover="true" Style="cursor:pointer">
+            <thead><tr><th>When</th><th>Project</th><th>Component</th><th>Env</th><th>Person</th></tr></thead>
+            <tbody>
+            @foreach (var r in _self)
+            {
+                <tr @onclick="@(() => Nav.NavigateTo($"/deployments/{r.RequestId}"))"><td>@r.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td><td>@r.ProjectName</td><td>@r.ComponentName</td><td>@r.EnvironmentName</td><td>@r.Person</td></tr>
+            }
+            </tbody>
+        </MudSimpleTable>
+    }
+}
+else { <MudProgressLinear Indeterminate="true" /> }
+
+@code {
+    private Actor? _actor;
+    private DateTime? _from = DateTime.Today.AddMonths(-3), _to = DateTime.Today;
+    private IReadOnlyList<DirectToProdRow>? _direct;
+    private IReadOnlyList<SelfApprovedRow>? _self;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync() { _actor = await Actors.GetAsync(); await Load(); }
+
+    private async Task Load()
+    {
+        try
+        {
+            var from = new DateTimeOffset(_from!.Value.Date, TimeZoneInfo.Local.GetUtcOffset(_from.Value.Date));
+            var to = new DateTimeOffset(_to!.Value.Date.AddDays(1), TimeZoneInfo.Local.GetUtcOffset(_to.Value.Date));
+            _direct = await Deployments.DirectToProdReportAsync(_actor!, from, to);
+            _self = await Deployments.SelfApprovedReportAsync(_actor!, from, to);
+        }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+    }
+}

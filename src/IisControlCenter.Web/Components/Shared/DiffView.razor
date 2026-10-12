@@ -1,0 +1,5 @@
+@using IisControlCenter.Core.Deployments
+<pre class="diff">@foreach (var l in Lines) {
+<div class="@(l.Kind == DiffKind.Added ? "add" : l.Kind == DiffKind.Removed ? "del" : l.Text == "…" ? "gap" : "")">@(l.Kind == DiffKind.Added ? "+ " : l.Kind == DiffKind.Removed ? "- " : "  ")@l.Text</div>
+}</pre>
+@code { [Parameter, EditorRequired] public IReadOnlyList<DiffLine> Lines { get; set; } = []; }

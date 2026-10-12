@@ -44,6 +44,12 @@ public sealed record RequestDetail(
     IReadOnlyList<RunDetail> Runs, string? PartialBanner, bool CanApprove, string? CannotApproveReason, bool CanCancel, bool CanReschedule,
     IReadOnlyList<string> PackageWarnings, bool SelfApprovalAllowed);
 
+public sealed record DeployChoice(Guid ProjectId, string ProjectName, Guid ComponentId, string ComponentName, string Environment, IReadOnlyList<DeployTargetChoice> Targets, bool RequiresStaging);
+public sealed record DeployTargetChoice(Guid TargetId, string ServerName, string SiteName, string AppPath, TargetStatus Status, bool AgentOnline);
+
+public sealed record DirectToProdRow(string ProjectName, string ComponentName, string Month, Guid RequestId, string RequestedBy, string Reason, RequestStatus Status, DateTimeOffset At, string Approvers);
+public sealed record SelfApprovedRow(string ProjectName, string ComponentName, string EnvironmentName, Guid RequestId, string Person, DateTimeOffset At);
+
 /// <summary>Submit, approve, reject, cancel, reschedule, roll back, and read requests. Every rule lives in Core (<see cref="SubmitRules"/>, <see cref="ApprovalRules"/>, <see cref="RequestStateMachine"/>).</summary>
 public sealed class DeploymentService(
     IDbContextFactory<AppDbContext> dbf,
@@ -562,5 +568,61 @@ public sealed class DeploymentService(
         if (comp is null || !actor.Access.CanOnProject(ProjectPermission.SubmitDeployment, comp.ProjectId, environment)) return [];
         var now = clock.GetUtcNow();
         return await db.Packages.AsNoTracking().Where(p => p.ComponentId == componentId && p.DeletedAt == null && p.ExpiresAt > now).OrderByDescending(p => p.UploadedAt).Take(30).ToListAsync();
+    }
+
+    // =========================== wizard and report helpers ===========================
+
+    /// <summary>Everything this person may deploy to: project, component, environment and the targets in it.</summary>
+    public async Task<IReadOnlyList<DeployChoice>> ChoicesAsync(Actor actor, Func<Guid, bool> isOnline)
+    {
+        await using var db = await dbf.CreateDbContextAsync();
+        var comps = await db.Components.AsNoTracking().ToListAsync();
+        var projects = await db.Projects.AsNoTracking().Where(p => p.IsActive).ToDictionaryAsync(p => p.Id);
+        var targets = await db.DeploymentTargets.AsNoTracking().OrderBy(t => t.DeployOrder).ToListAsync();
+        var servers = await db.Servers.AsNoTracking().ToDictionaryAsync(s => s.Id, s => s.Name);
+        var list = new List<DeployChoice>();
+        foreach (var c in comps)
+        {
+            if (!projects.TryGetValue(c.ProjectId, out var p)) continue;
+            foreach (var g in targets.Where(t => t.ComponentId == c.Id).GroupBy(t => t.EnvironmentName))
+            {
+                if (!actor.Access.CanOnProject(ProjectPermission.SubmitDeployment, p.Id, g.Key)) continue;
+                list.Add(new DeployChoice(p.Id, p.Name, c.Id, c.Name, g.Key,
+                    g.Select(t => new DeployTargetChoice(t.Id, servers.GetValueOrDefault(t.ServerId, "?"), t.IisSiteName, t.AppPath, t.Status, isOnline(t.ServerId))).ToList(), c.RequiresStagingBeforeProd));
+            }
+        }
+        return list.OrderBy(x => x.ProjectName).ThenBy(x => x.ComponentName).ThenBy(x => x.Environment).ToList();
+    }
+
+    /// <summary>The per-file plan stored at submit time (what the approver saw).</summary>
+    public async Task<IReadOnlyList<PlannedChange>> GetChangesAsync(Actor actor, Guid requestId, Guid targetId)
+    {
+        var d = await GetAsync(actor, requestId);
+        return d is null || d.Targets.All(t => t.TargetId != targetId) ? [] : store.ReadChanges(requestId, targetId);
+    }
+
+    public async Task<IReadOnlyList<DirectToProdRow>> DirectToProdReportAsync(Actor actor, DateTimeOffset from, DateTimeOffset to)
+    {
+        if (!actor.Can(Permission.ViewAudit) && !actor.Can(Permission.ViewAllProjects)) throw new ForbiddenException("You do not have permission to view this report.");
+        await using var db = await dbf.CreateDbContextAsync();
+        var reqs = await db.DeploymentRequests.AsNoTracking().Where(r => r.IsDirectToProd && r.RequestedAt >= from && r.RequestedAt < to).OrderByDescending(r => r.RequestedAt).ToListAsync();
+        var ids = reqs.Select(r => r.Id).ToList();
+        var approvers = (await db.Approvals.AsNoTracking().Where(a => ids.Contains(a.RequestId) && a.Decision == ApprovalDecision.Approved).ToListAsync())
+            .GroupBy(a => a.RequestId).ToDictionary(g => g.Key, g => string.Join(", ", g.Select(a => a.ApproverName + (a.IsSelfApproval ? " (self)" : ""))));
+        var comps = await db.Components.AsNoTracking().ToDictionaryAsync(c => c.Id);
+        var projects = await db.Projects.AsNoTracking().ToDictionaryAsync(p => p.Id, p => p.Name);
+        return reqs.Select(r => new DirectToProdRow(projects.GetValueOrDefault(comps[r.ComponentId].ProjectId, "?"), comps[r.ComponentId].Name, r.RequestedAt.ToString("yyyy-MM"),
+            r.Id, r.RequestedBy, r.DirectToProdReason ?? "", r.Status, r.RequestedAt, approvers.GetValueOrDefault(r.Id, ""))).ToList();
+    }
+
+    public async Task<IReadOnlyList<SelfApprovedRow>> SelfApprovedReportAsync(Actor actor, DateTimeOffset from, DateTimeOffset to)
+    {
+        if (!actor.Can(Permission.ViewAudit) && !actor.Can(Permission.ViewAllProjects)) throw new ForbiddenException("You do not have permission to view this report.");
+        await using var db = await dbf.CreateDbContextAsync();
+        var rows = await db.Approvals.AsNoTracking().Where(a => a.IsSelfApproval && a.Decision == ApprovalDecision.Approved && a.DecidedAt >= from && a.DecidedAt < to).OrderByDescending(a => a.DecidedAt).ToListAsync();
+        var reqs = await db.DeploymentRequests.AsNoTracking().Where(r => rows.Select(a => a.RequestId).Contains(r.Id)).ToDictionaryAsync(r => r.Id);
+        var comps = await db.Components.AsNoTracking().ToDictionaryAsync(c => c.Id);
+        var projects = await db.Projects.AsNoTracking().ToDictionaryAsync(p => p.Id, p => p.Name);
+        return rows.Select(a => { var r = reqs[a.RequestId]; var c = comps[r.ComponentId]; return new SelfApprovedRow(projects.GetValueOrDefault(c.ProjectId, "?"), c.Name, r.EnvironmentName, r.Id, a.ApproverName, a.DecidedAt); }).ToList();
     }
 }

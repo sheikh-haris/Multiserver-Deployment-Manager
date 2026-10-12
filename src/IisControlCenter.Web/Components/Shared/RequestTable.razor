@@ -1,0 +1,31 @@
+@using IisControlCenter.Core.Deployments
+@using IisControlCenter.Web.Deployments
+@inject NavigationManager Nav
+@if (Rows is null || Rows.Count == 0) { <MudText Class="pa-4">@Empty</MudText> }
+else
+{
+    <MudSimpleTable Dense="true" Hover="true" Style="cursor:pointer">
+        <thead><tr><th>Status</th><th>Project / component</th><th>Env</th><th>Package</th><th>Source</th><th>By</th><th>When</th><th>Approvals</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var r in Rows)
+        {
+            <tr @onclick="@(() => Nav.NavigateTo($"/deployments/{r.Id}"))">
+                <td><StatusChip Status="@r.Status.ToString()" /></td>
+                <td>@r.ProjectName / @r.ComponentName</td>
+                <td>@r.EnvironmentName</td>
+                <td>@r.PackageName</td>
+                <td>@r.SourceReference</td>
+                <td>@r.RequestedBy</td>
+                <td>@r.RequestedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")@(r.ScheduledAt is { } s ? " → " + s.ToLocalTime().ToString("MM-dd HH:mm") : "")</td>
+                <td>@r.ApprovalsGiven / @r.ApprovalsRequired</td>
+                <td><RequestBadges Row="@(new RequestBadges.Info(r.IsDirectToProd, r.SelfApproved, r.Type))" /></td>
+            </tr>
+        }
+        </tbody>
+    </MudSimpleTable>
+}
+@code {
+    [Parameter] public IReadOnlyList<RequestRow>? Rows { get; set; }
+    [Parameter] public string Empty { get; set; } = "Nothing here.";
+    [Parameter] public bool ShowProgress { get; set; }
+}

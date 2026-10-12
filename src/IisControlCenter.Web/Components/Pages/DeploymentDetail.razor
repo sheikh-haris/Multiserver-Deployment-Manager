@@ -1,0 +1,290 @@
+@page "/deployments/{Id:guid}"
+@attribute [Authorize]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject DeploymentService Deployments
+@inject DeploymentEventBus Bus
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@using IisControlCenter.Contracts.Deployments
+@using IisControlCenter.Core.Deployments
+@using IisControlCenter.Web.Deployments
+<PageTitle>Deployment</PageTitle>
+
+@if (_loaded && _d is null)
+{
+    <MudAlert Severity="Severity.Warning">Request not found, or you do not have access to it.</MudAlert>
+}
+else if (_d is not null)
+{
+    var r = _d.Request;
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2" Wrap="Wrap.Wrap">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="@(() => Nav.NavigateTo("/deployments"))" />
+        <MudText Typo="Typo.h5">@_d.Project.Name / @_d.Component.Name → @r.EnvironmentName</MudText>
+        <StatusChip Status="@r.Status.ToString()" />
+        <RequestBadges Row="@(new RequestBadges.Info(r.IsDirectToProd, r.SelfApproved, r.Type))" />
+    </MudStack>
+
+    @if (_d.PartialBanner is not null) { <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-3">@_d.PartialBanner</MudAlert> }
+    @if (r.IsDirectToProd)
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">Direct to Production (skipped Staging). Reason: <b>@r.DirectToProdReason</b></MudAlert>
+    }
+    @if (r.SelfApproved)
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">This request was approved by the person who submitted it. The project allows this for @r.EnvironmentName; it is recorded in the audit log.</MudAlert>
+    }
+    @if (!string.IsNullOrEmpty(r.StatusDetail) && r.Status is not (RequestStatus.Submitted or RequestStatus.Approved or RequestStatus.Succeeded))
+    {
+        <MudAlert Severity="@(r.Status is RequestStatus.NeedsReapproval ? Severity.Warning : Severity.Info)" Class="mb-3">@r.StatusDetail</MudAlert>
+    }
+    @if (r.Status == RequestStatus.Approved && r.StatusDetail?.StartsWith("Waiting") == true) { <MudAlert Severity="Severity.Warning" Class="mb-3">@r.StatusDetail</MudAlert> }
+
+    <MudGrid>
+        <MudItem xs="12" md="7">
+            <MudPaper Outlined="true" Class="pa-3 mb-3">
+                <MudSimpleTable Dense="true">
+                    <tbody>
+                        <tr><td>Type</td><td>@(r.Type == RequestType.Rollback ? "Rollback" : r.Mode == 1 ? "Full Replace" : "Overlay")</td></tr>
+                        <tr><td>Requested by</td><td>@r.RequestedBy, @r.RequestedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td></tr>
+                        @if (r.Type == RequestType.Deploy) { <tr><td>Source</td><td>@r.SourceReference</td></tr> }
+                        @if (!string.IsNullOrWhiteSpace(r.Notes)) { <tr><td>@(r.Type == RequestType.Rollback ? "Reason" : "Notes")</td><td style="white-space:pre-wrap">@r.Notes</td></tr> }
+                        <tr><td>Package</td><td>@_d.Package.FileName <span class="mono">(@_d.Package.Sha256[..16]…)</span>, @(_d.Package.Size / 1024) KB, @_d.Package.EntryCount files, virus scan: @_d.Package.AvResult</td></tr>
+                        @if (r.PromotedFromRequestId is { } pf) { <tr><td>Promoted from</td><td><MudLink Href="@($"/deployments/{pf}")">Staging request</MudLink> (same package, succeeded)</td></tr> }
+                        @if (!string.IsNullOrEmpty(r.SingleServerReason)) { <tr><td>Only some servers</td><td>@r.SingleServerReason</td></tr> }
+                        @if (r.ScheduledAt is { } s) { <tr><td>Scheduled</td><td>@s.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td></tr> }
+                        <tr><td>Expires</td><td>@r.ExpiresAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td></tr>
+                        <tr><td>Approvals needed</td><td>@r.ApprovalsRequired</td></tr>
+                    </tbody>
+                </MudSimpleTable>
+                @foreach (var w in _d.PackageWarnings) { <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-1">@w</MudAlert> }
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="5">
+            <MudPaper Outlined="true" Class="pa-3 mb-3">
+                <MudText Typo="Typo.h6">Decision</MudText>
+                @foreach (var a in _d.Approvals)
+                {
+                    <MudText Typo="Typo.body2">
+                        @(a.Decision == ApprovalDecision.Approved ? "✔" : "✘") @a.ApproverName, @a.DecidedAt.ToLocalTime().ToString("MM-dd HH:mm")
+                        @if (a.IsSelfApproval) { <MudChip T="string" Size="Size.Small" Color="Color.Warning">self</MudChip> }
+                        @if (!string.IsNullOrEmpty(a.Comment)) { <i> — @a.Comment</i> }
+                    </MudText>
+                }
+                @if (r.Status == RequestStatus.Submitted)
+                {
+                    @if (_d.CanApprove)
+                    {
+                        <MudTextField T="string" @bind-Value="_comment" Label="Comment (needed to reject)" Immediate="true" Class="mt-2" />
+                        <MudStack Row="true" Class="mt-2">
+                            <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="Approve" Disabled="_busy">Approve</MudButton>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="Reject" Disabled="_busy">Reject</MudButton>
+                        </MudStack>
+                        @if (string.Equals(r.RequestedById, _actor!.UserId, StringComparison.OrdinalIgnoreCase)) { <MudText Typo="Typo.caption">You submitted this request. Approving it yourself is allowed for this project and is marked SELF-APPROVED.</MudText> }
+                    }
+                    else { <MudText Typo="Typo.body2" Class="mt-1">Waiting for @(r.ApprovalsRequired - _d.Approvals.Count(a => a.Decision == ApprovalDecision.Approved)) more approval(s). @_d.CannotApproveReason</MudText> }
+                }
+                @if (_d.CanCancel)
+                {
+                    <MudButton Class="mt-2" Variant="Variant.Text" Color="Color.Error" OnClick="Cancel" Disabled="_busy">Cancel request</MudButton>
+                }
+                @if (_d.CanReschedule)
+                {
+                    <MudExpansionPanels Class="mt-2" Elevation="0"><MudExpansionPanel Text="Change the run time">
+                        <MudStack Row="true" AlignItems="AlignItems.Center">
+                            <MudDatePicker Label="Date" @bind-Date="_date" MinDate="DateTime.Today" Clearable="true" />
+                            <MudTimePicker Label="Time" @bind-Time="_time" Disabled="@(_date is null)" />
+                            <MudButton Variant="Variant.Outlined" OnClick="Reschedule">Save</MudButton>
+                        </MudStack>
+                        <MudText Typo="Typo.caption">Clear the date to run as soon as it is approved.</MudText>
+                    </MudExpansionPanel></MudExpansionPanels>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mb-3">@_error</MudAlert> }
+
+    @if (r.Type == RequestType.Deploy)
+    {
+        <MudText Typo="Typo.h6" Class="mt-2">What changes</MudText>
+        @foreach (var t in _d.Targets)
+        {
+            <MudPaper Outlined="true" Class="pa-3 mb-2">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+                    <b>@(t.Order + 1). @t.ServerName</b><span class="mono">@t.PhysicalPath</span>
+                    <MudChip T="string" Size="Size.Small" Color="Color.Success">@t.Added added</MudChip>
+                    <MudChip T="string" Size="Size.Small" Color="Color.Info">@t.Replaced replaced</MudChip>
+                    <MudChip T="string" Size="Size.Small" Color="Color.Error">@t.Deleted deleted</MudChip>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@t.Skipped protected skipped</MudChip>
+                </MudStack>
+                @if (t.DeletionWarning is not null) { <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Dense="true" Class="my-1">@t.DeletionWarning</MudAlert> }
+                <MudExpansionPanels Elevation="0" Class="mt-1"><MudExpansionPanel Text="Files" Expanded="_open[t.TargetId]" ExpandedChanged="@(v => OpenTarget(t.TargetId, v))">
+                    @if (_open[t.TargetId]) { <FileChangeList Changes="Changes(t.TargetId)" /> }
+                </MudExpansionPanel></MudExpansionPanels>
+            </MudPaper>
+        }
+        @if (_d.ForcedFiles.Count > 0)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="my-2">
+                <b>Protected config files will be OVERWRITTEN.</b> Secrets are hidden in the comparison below (shown as ••••[code]; the same code means the same value).
+            </MudAlert>
+            @foreach (var f in _d.ForcedFiles)
+            {
+                <MudPaper Outlined="true" Class="pa-3 mb-2">
+                    <MudText Typo="Typo.subtitle1" Class="mono">@f.Path</MudText>
+                    <MudText Typo="Typo.body2">Reason: @f.Reason</MudText>
+                    @foreach (var (tid, v) in f.PerTarget)
+                    {
+                        var tn = _d.Targets.FirstOrDefault(t => t.TargetId.ToString() == tid)?.ServerName ?? tid;
+                        <MudText Typo="Typo.caption">@tn</MudText>
+                        @if (v.Note is not null) { <MudText Typo="Typo.caption" Color="Color.Warning" Class="d-block">@v.Note</MudText> }
+                        @if (v.Lines is not null) { <DiffView Lines="v.Lines" /> }
+                        else if (v.After is not null) { <MudText Typo="Typo.caption">No live file to compare, or too large.</MudText> }
+                    }
+                </MudPaper>
+            }
+        }
+    }
+
+    @if (_d.Runs.Count > 0)
+    {
+        <MudText Typo="Typo.h6" Class="mt-3">Execution</MudText>
+        <MudSimpleTable Dense="true" Hover="true" Class="mb-2">
+            <thead><tr><th>#</th><th>Server</th><th>Status</th><th>Step</th><th>Started</th><th>Duration</th><th>Files</th><th>Backup</th><th></th></tr></thead>
+            <tbody>
+            @foreach (var run in _d.Runs)
+            {
+                <tr style="cursor:pointer" @onclick="() => SelectRun(run.RunId)">
+                    <td>@run.Sequence</td><td>@run.ServerName</td>
+                    <td><StatusChip Status="@run.Status.ToString()" /></td>
+                    <td>@(run.Status == RunStatus.Running ? run.CurrentStep : run.FailureStep)</td>
+                    <td>@run.StartedAt?.ToLocalTime().ToString("HH:mm:ss")</td>
+                    <td>@(run.DurationMs > 0 ? $"{run.DurationMs / 1000.0:0.#} s" : "")</td>
+                    <td>+@run.Added ~@run.Replaced -@run.Deleted</td>
+                    <td class="mono">@run.BackupId</td>
+                    <td>@if (run.CanRollback) { <MudButton Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" OnClick="() => Rollback(run)">Roll back…</MudButton> }</td>
+                </tr>
+                @if (!string.IsNullOrEmpty(run.Message) && run.Status is not RunStatus.Succeeded)
+                {
+                    <tr><td></td><td colspan="8"><MudText Typo="Typo.caption" Color="@(run.Message.StartsWith("ROLLBACK FAILED") ? Color.Error : Color.Default)">@run.Message</MudText></td></tr>
+                }
+            }
+            </tbody>
+        </MudSimpleTable>
+        @if (_logRun is not null)
+        {
+            <MudText Typo="Typo.subtitle2">Log @if (_d.Runs.FirstOrDefault(x => x.RunId == _logRun)?.Status == RunStatus.Running) { <MudChip T="string" Size="Size.Small" Color="Color.Success">live</MudChip> }</MudText>
+            <div class="runlog" id="runlog">@foreach (var l in _log) { <div class="@l.Level">@l.At.ToLocalTime().ToString("HH:mm:ss") [@l.Step] @l.Message</div> }</div>
+        }
+    }
+}
+else { <MudProgressLinear Indeterminate="true" /> }
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private Actor? _actor;
+    private RequestDetail? _d;
+    private bool _loaded, _busy;
+    private string? _comment, _error;
+    private DateTime? _date; private TimeSpan? _time = new(22, 0, 0);
+    private readonly Dictionary<Guid, bool> _open = new();
+    private readonly Dictionary<Guid, IReadOnlyList<PlannedChange>> _changes = new();
+    private Guid? _logRun;
+    private List<DeploymentLogLine> _log = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _actor = await Actors.GetAsync();
+        await Reload();
+        Bus.Changed += OnChanged;
+    }
+
+    private async Task Reload()
+    {
+        _d = await Deployments.GetAsync(_actor!, Id);
+        _loaded = true;
+        if (_d is null) return;
+        foreach (var t in _d.Targets) _open.TryAdd(t.TargetId, false);
+        foreach (var kv in _open.Where(k => k.Value && !_changes.ContainsKey(k.Key)).ToList())
+            _changes[kv.Key] = await Deployments.GetChangesAsync(_actor!, Id, kv.Key);
+        if (_logRun is null)
+        {
+            var run = _d.Runs.FirstOrDefault(x => x.Status == RunStatus.Running) ?? _d.Runs.LastOrDefault();
+            if (run is not null) { _logRun = run.RunId; _log = (await Deployments.GetLogAsync(_actor!, run.RunId)).ToList(); }
+        }
+    }
+
+    private IReadOnlyList<PlannedChange> Changes(Guid targetId) => _changes.TryGetValue(targetId, out var c) ? c : [];
+
+    private async Task OpenTarget(Guid targetId, bool open)
+    {
+        _open[targetId] = open;
+        if (open && !_changes.ContainsKey(targetId)) _changes[targetId] = await Deployments.GetChangesAsync(_actor!, Id, targetId);
+    }
+
+    private void OnChanged(DeploymentChanged e)
+    {
+        if (e.RequestId != Id) return;
+        _ = InvokeAsync(async () =>
+        {
+            if (e.LogOnly && e.RunId == _logRun) await AppendLog();
+            else { await Reload(); if (_logRun is { } lr) await AppendLog(); }
+            StateHasChanged();
+        });
+    }
+
+    private async Task AppendLog()
+    {
+        var last = _log.Count == 0 ? 0 : _log[^1].Seq;
+        _log.AddRange(await Deployments.GetLogAsync(_actor!, _logRun!.Value, last));
+    }
+
+    private async Task SelectRun(Guid runId) { _logRun = runId; _log = (await Deployments.GetLogAsync(_actor!, runId)).ToList(); }
+
+    private async Task Do(Func<Task<OpResult>> action, string ok)
+    {
+        _busy = true; _error = null;
+        try { var r = await action(); if (r.Ok) Snackbar.Add(ok, Severity.Success); else _error = r.Error; }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        _busy = false;
+        await Reload();
+    }
+
+    private Task Approve() => Do(() => Deployments.ApproveAsync(_actor!, Id, _comment), "Approved.");
+    private Task Reject() => Do(() => Deployments.RejectAsync(_actor!, Id, _comment), "Rejected.");
+    private async Task Cancel()
+    {
+        var ok = await Dialogs.ShowMessageBoxAsync("Cancel this request?", "It will not be deployed.", yesText: "Cancel request", cancelText: "Keep");
+        if (ok == true) await Do(() => Deployments.CancelAsync(_actor!, Id, null), "Cancelled.");
+    }
+    private Task Reschedule()
+    {
+        DateTimeOffset? at = _date is null ? null : new DateTimeOffset(_date.Value.Date + (_time ?? TimeSpan.Zero), TimeZoneInfo.Local.GetUtcOffset(_date.Value.Date + (_time ?? TimeSpan.Zero)));
+        return Do(() => Deployments.RescheduleAsync(_actor!, Id, at), "Saved.");
+    }
+
+    private async Task Rollback(RunDetail run)
+    {
+        var parameters = new DialogParameters<ReasonDialog>
+        {
+            { x => x.Message, $"The files on {run.ServerName} are restored from backup {run.BackupId}. Only the latest deployment can be rolled back. " + (_d!.Request.EnvironmentName == "Prod" ? "A rollback in Production needs an approver." : "No approval is needed outside Production.") },
+        };
+        var dlg = await Dialogs.ShowAsync<ReasonDialog>("Roll back this deployment", parameters);
+        var res = await dlg.Result;
+        if (res is not { Canceled: false } || res.Data is not string text || string.IsNullOrWhiteSpace(text)) return;
+        _busy = true; _error = null;
+        try
+        {
+            var r = await Deployments.RequestRollbackAsync(_actor!, run.RunId, text);
+            if (r.Ok) { Nav.NavigateTo($"/deployments/{r.Value}"); return; }
+            _error = r.Error;
+        }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        _busy = false;
+    }
+
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

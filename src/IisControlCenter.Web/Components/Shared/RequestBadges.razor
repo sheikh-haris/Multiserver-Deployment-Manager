@@ -1,0 +1,17 @@
+@* The warning badges every list and page shows the same way. *@
+@if (Row.IsDirectToProd)
+{
+    <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled" Icon="@Icons.Material.Filled.Warning">DIRECT TO PROD</MudChip>
+}
+@if (Row.SelfApproved)
+{
+    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled" Icon="@Icons.Material.Filled.PersonOutline">SELF-APPROVED</MudChip>
+}
+@if (Row.Type == IisControlCenter.Core.Deployments.RequestType.Rollback)
+{
+    <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Filled" Icon="@Icons.Material.Filled.Undo">ROLLBACK</MudChip>
+}
+@code {
+    public sealed record Info(bool IsDirectToProd, bool SelfApproved, IisControlCenter.Core.Deployments.RequestType Type);
+    [Parameter, EditorRequired] public Info Row { get; set; } = default!;
+}

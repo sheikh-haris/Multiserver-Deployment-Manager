@@ -4,20 +4,35 @@
 @inject ActorProvider Actors
 @inject ServerQueries Queries
 @inject ServerEventBus Bus
+@inject DeploymentService Deployments
+@inject DeploymentEventBus DeployBus
 <PageTitle>Dashboard</PageTitle>
 
 <MudText Typo="Typo.h4" Class="mb-4">Dashboard</MudText>
 
-@if (_error is not null)
-{
-    <MudAlert Severity="Severity.Info">@_error</MudAlert>
-}
-else if (_data is null)
+@if (_data is null && _error is null)
 {
     <MudProgressLinear Indeterminate="true" />
 }
 else
 {
+    @if (_error is not null && _waiting.Count == 0 && _recent.Count == 0) { <MudAlert Severity="Severity.Info" Class="mb-3">@_error</MudAlert> }
+    @if (_waiting.Count > 0)
+    {
+        <MudPaper Class="pa-4 mb-3" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-2">Waiting for your approval (@_waiting.Count)</MudText>
+            <RequestTable Rows="_waiting" />
+        </MudPaper>
+    }
+    @if (_recent.Count > 0)
+    {
+        <MudPaper Class="pa-4 mb-3" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-2">Recent deployments <MudLink Href="/deployments" Typo="Typo.caption">all</MudLink></MudText>
+            <RequestTable Rows="_recent" />
+        </MudPaper>
+    }
+    @if (_data is not null)
+    {
     <MudGrid>
         <MudItem xs="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.overline">Servers</MudText><MudText Typo="Typo.h4">@_data.Total</MudText></MudPaper></MudItem>
         <MudItem xs="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.overline">Online</MudText><MudText Typo="Typo.h4" Color="Color.Success">@_data.Online</MudText></MudPaper></MudItem>
@@ -62,28 +77,33 @@ else
         </MudItem>
         <MudItem xs="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.overline">Open drift</MudText><MudText Typo="Typo.h4" Color="@(_data.OpenDrift > 0 ? Color.Warning : Color.Default)">@_data.OpenDrift</MudText><MudLink Href="/drift">View</MudLink></MudPaper></MudItem>
         <MudItem xs="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.overline">Blocked targets</MudText><MudText Typo="Typo.h4" Color="@(_data.BlockedTargets > 0 ? Color.Error : Color.Default)">@_data.BlockedTargets</MudText><MudText Typo="Typo.caption" Class="d-block">Missing or drifted in IIS</MudText></MudPaper></MudItem>
-        <MudItem xs="12">
-            <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined">Pending approvals and recent deployments will appear here from Phase 3.</MudAlert>
-        </MudItem>
     </MudGrid>
+    }
 }
 
 @code {
     private DashboardData? _data;
     private string? _error;
+    private IReadOnlyList<RequestRow> _waiting = [], _recent = [];
 
     protected override async Task OnInitializedAsync()
     {
         Bus.Changed += OnChanged;
+        DeployBus.Changed += OnDeployChanged;
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        try { _data = await Queries.GetDashboardAsync(await Actors.GetAsync()); _error = null; }
-        catch (ForbiddenException) { _error = "You are signed in but have no role yet. Ask a Platform Admin to assign one."; }
+        var actor = await Actors.GetAsync();
+        try { _data = await Queries.GetDashboardAsync(actor); _error = null; }
+        catch (ForbiddenException) { _data = null; _error = "You have no platform role. Your project roles (if any) are shown below. Ask a Platform Admin if something is missing."; }
+        _waiting = await Deployments.ApprovalQueueAsync(actor);
+        _recent = (await Deployments.ListAsync(actor, take: 8));
     }
 
+    private void OnDeployChanged(DeploymentChanged e) { if (!e.LogOnly) _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); }); }
+
     private void OnChanged(ServerChanged e) => _ = InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
-    public void Dispose() => Bus.Changed -= OnChanged;
+    public void Dispose() { Bus.Changed -= OnChanged; DeployBus.Changed -= OnDeployChanged; }
 }

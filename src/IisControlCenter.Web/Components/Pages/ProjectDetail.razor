@@ -5,6 +5,8 @@
 @inject ProjectService Projects
 @inject MembershipService Members
 @inject TargetService Targets
+@inject DeploymentService DeploymentsSvc
+@inject ProtectedListService ProtectedLists
 @inject ServerEventBus Bus
 @inject IDialogService Dialogs
 @inject ISnackbar Snackbar
@@ -51,6 +53,11 @@ else if (_view is not null)
                         <MudText Typo="Typo.caption">health: <span class="mono">@c.HealthCheckPath</span></MudText>
                         @if (c.RequiresStagingBeforeProd) { <MudChip T="string" Size="Size.Small" Color="Color.Info">Staging required before Prod</MudChip> }
                         <MudSpacer />
+                        @foreach (var env in c.Targets.Select(t => t.EnvironmentName).Distinct().Where(e => _actor!.Access.CanOnProject(ProjectPermission.SubmitDeployment, Id, e)))
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="@(env == "Prod" ? Color.Error : Color.Primary)" StartIcon="@Icons.Material.Filled.RocketLaunch"
+                                       OnClick="@(() => Nav.NavigateTo($"/deployments/new?component={c.Id}&env={env}"))">Deploy to @env</MudButton>
+                        }
                         @if (_view.CanManage)
                         {
                             <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="() => EditComponent(c)" title="Edit" />
@@ -100,11 +107,34 @@ else if (_view is not null)
                         </MudSimpleTable>
                     }
                     <MudExpansionPanels Class="mt-2" Elevation="0">
-                        <MudExpansionPanel Text="Protected paths (used by deployments from Phase 3)">
-                            <MudText Typo="Typo.caption">Config files are copied only if they do not exist on the target. Data folders are never overwritten, never deleted and never backed up.</MudText>
+                        <MudExpansionPanel Text="Protected paths">
+                            <MudText Typo="Typo.caption" Class="d-block mb-1">Config files are copied only if they do not exist on the target. Data folders are never overwritten, never deleted and never backed up. A pattern without a slash matches in the site root only; use <span class="mono">**\</span> for any depth.</MudText>
                             @foreach (var pp in c.ProtectedPaths)
                             {
-                                <MudChip T="string" Size="Size.Small" Color="@(pp.Kind == ProtectedPathKind.DataFolder ? Color.Error : Color.Default)" Variant="Variant.Outlined">@(pp.Kind == ProtectedPathKind.DataFolder ? "data" : "config"): @pp.Path</MudChip>
+                                var ppc = pp;
+                                <MudChip T="string" Size="Size.Small" Color="@(pp.Kind == ProtectedPathKind.DataFolder ? Color.Error : Color.Default)" Variant="Variant.Outlined"
+                                         OnClose="@(_view.CanManage && !pp.IsDefault ? (() => RemovePath(c, ppc)) : null)">@(pp.Kind == ProtectedPathKind.DataFolder ? "data" : "config"): @pp.Path</MudChip>
+                            }
+                            @if (_view.CanManage)
+                            {
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Class="mt-2" Wrap="Wrap.Wrap">
+                                    <MudTextField T="string" @bind-Value="_newPath" Label="Add path" Immediate="true" Style="max-width:300px" />
+                                    <MudSelect T="ProtectedPathKind" @bind-Value="_newKind" Label="Kind" Style="max-width:160px">
+                                        <MudSelectItem T="ProtectedPathKind" Value="ProtectedPathKind.DataFolder">Data folder</MudSelectItem>
+                                        <MudSelectItem T="ProtectedPathKind" Value="ProtectedPathKind.ConfigFile">Config file</MudSelectItem>
+                                    </MudSelect>
+                                    <MudButton Variant="Variant.Outlined" OnClick="() => AddPath(c)">Add</MudButton>
+                                </MudStack>
+                                <MudDivider Class="my-2" />
+                                @if (_confirmed.TryGetValue(c.Id, out var conf) && conf is not null)
+                                {
+                                    <MudAlert Severity="Severity.Success" Dense="true">Data folders confirmed complete by @conf.ConfirmedBy on @conf.ConfirmedAt.ToLocalTime().ToString("yyyy-MM-dd"). Full Replace is allowed.</MudAlert>
+                                }
+                                else
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="true">Full Replace is blocked until you confirm that the data folders above are complete (user uploads, generated files, anything the application writes). Any change to the list voids the confirmation.</MudAlert>
+                                }
+                                <MudButton Class="mt-1" Variant="Variant.Outlined" OnClick="() => ConfirmList(c)">The data folders are complete: confirm</MudButton>
                             }
                         </MudExpansionPanel>
                     </MudExpansionPanels>
@@ -153,7 +183,7 @@ else if (_view is not null)
         </MudTabPanel>
 
         <MudTabPanel Text="History">
-            <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined">Deployment history and logs appear here from Phase 3.</MudAlert>
+            <RequestTable Rows="_history" Empty="No deployments for this project yet." />
         </MudTabPanel>
 
         @if (_view.CanManage)
@@ -173,6 +203,13 @@ else if (_view is not null)
                     <MudSwitch T="bool" Value="kv.Value" ValueChanged="@((bool v) => SetSelf(env, v))" Color="@(env == "Prod" ? Color.Error : Color.Primary)" Label="@($"Allow self-approval on {env}")" />
                 }
 
+                <MudText Typo="Typo.subtitle1" Class="mt-4 mb-1">Email notifications</MudText>
+                <MudText Typo="Typo.body2" Class="mb-2">This address (or several, separated by ;) gets an email when a request needs approval and when a deployment finishes. Emails contain names and links only.</MudText>
+                <MudStack Row="true" AlignItems="AlignItems.Center">
+                    <MudTextField T="string" @bind-Value="_notifyEmail" Label="Notification email" Immediate="true" Style="max-width:420px" />
+                    <MudButton Variant="Variant.Outlined" OnClick="SaveNotify">Save</MudButton>
+                </MudStack>
+
                 <MudDivider Class="my-4" />
                 <MudStack Row="true">
                     <MudButton Variant="Variant.Outlined" OnClick="Rename">Rename / edit description</MudButton>
@@ -190,6 +227,10 @@ else { <MudProgressLinear Indeterminate="true" /> }
     private IReadOnlyList<MemberRow> _members = [];
     private Actor? _actor;
     private bool _loaded;
+    private IReadOnlyList<RequestRow> _history = [];
+    private readonly Dictionary<Guid, ProtectedListConfirmation?> _confirmed = new();
+    private string? _newPath, _notifyEmail;
+    private ProtectedPathKind _newKind = ProtectedPathKind.DataFolder;
 
     protected override void OnInitialized() => Bus.Changed += OnChanged;
     protected override async Task OnParametersSetAsync() => await Reload();
@@ -199,8 +240,20 @@ else { <MudProgressLinear Indeterminate="true" /> }
         _actor = await Actors.GetAsync();
         _view = await Projects.GetAsync(_actor, Id);
         try { _members = _view is null ? [] : await Members.ListAsync(_actor, Id); } catch (ForbiddenException) { _members = []; }
+        if (_view is not null)
+        {
+            _history = await DeploymentsSvc.ListAsync(_actor, projectId: Id, take: 100);
+            _notifyEmail = _view.Project.NotificationEmail;
+            _confirmed.Clear();
+            foreach (var c in _view.Components) _confirmed[c.Id] = await ProtectedLists.GetConfirmationAsync(c.Id);
+        }
         _loaded = true;
     }
+
+    private Task AddPath(ComponentView c) { var path = _newPath ?? ""; _newPath = null; return Run(() => ProtectedLists.AddAsync(_actor!, c.Id, path, _newKind), "Added."); }
+    private Task RemovePath(ComponentView c, ProtectedPath p) => Run(() => ProtectedLists.RemoveAsync(_actor!, c.Id, p.Id), "Removed.");
+    private Task ConfirmList(ComponentView c) => Run(() => ProtectedLists.ConfirmAsync(_actor!, c.Id), "Confirmed.");
+    private Task SaveNotify() => Run(() => Projects.SetNotificationEmailAsync(_actor!, Id, _notifyEmail), "Saved.");
 
     private void OnChanged(ServerChanged e) => _ = InvokeAsync(async () => { await Reload(); StateHasChanged(); });
 

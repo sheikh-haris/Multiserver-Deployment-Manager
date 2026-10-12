@@ -191,6 +191,26 @@ public sealed class ProjectService(IDbContextFactory<AppDbContext> dbf, AuditSer
         return OpResult.Success();
     }
 
+    public async Task<OpResult> SetNotificationEmailAsync(Actor actor, Guid projectId, string? addresses)
+    {
+        await RequireAsync(actor, "Project.SetNotificationEmail", projectId);
+        addresses = string.IsNullOrWhiteSpace(addresses) ? null : addresses.Trim();
+        if (addresses is not null)
+        {
+            if (addresses.Length > 500) return OpResult.Fail("Too long.");
+            foreach (var a in addresses.Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                if (!System.Net.Mail.MailAddress.TryCreate(a, out _)) return OpResult.Fail($"'{a}' is not a valid email address.");
+        }
+        await using var db = await dbf.CreateDbContextAsync();
+        var p = await db.Projects.FirstOrDefaultAsync(x => x.Id == projectId);
+        if (p is null) return OpResult.Fail("Project not found.");
+        var before = p.NotificationEmail;
+        p.NotificationEmail = addresses;
+        await db.SaveChangesAsync();
+        await audit.WriteAsync(actor, new AuditRecord("Project.SetNotificationEmail", "Project", projectId.ToString(), Before: before, After: addresses));
+        return OpResult.Success();
+    }
+
     /// <summary>Decision D5: off by default. Turning it on is audited. Using it later is badged and listed in a report.</summary>
     public async Task<OpResult> SetSelfApprovalAsync(Actor actor, Guid projectId, string environment, bool allow)
     {
