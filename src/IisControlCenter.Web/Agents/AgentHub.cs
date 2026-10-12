@@ -1,4 +1,5 @@
 using IisControlCenter.Contracts;
+using IisControlCenter.Web.Deployments;
 using IisControlCenter.Web.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
@@ -12,6 +13,8 @@ public sealed class AgentHub(
     AgentConnectionTracker tracker,
     AgentCommandService commands,
     AuditService audit,
+    RunReportService runs,
+    PendingAgentResults pending,
     ILogger<AgentHub> log) : Hub<IAgentClient>
 {
     private Guid ServerId => Guid.Parse(Context.User!.FindFirst(AgentCertAuth.ServerIdClaim)!.Value);
@@ -77,6 +80,17 @@ public sealed class AgentHub(
     public Task ReportRejected(CommandRejected rejected) =>
         audit.WriteSystemAsync(new AuditRecord("Agent.CommandRejected", "Server", ServerId.ToString(), ServerId,
             Result: "Rejected", Detail: $"{rejected.CommandId}: {rejected.Reason}"));
+
+    // ---- deployments ----
+
+    public async Task ReportRunStep(RunStep step) { await EnsureCertificateActiveAsync(); await runs.StepAsync(ServerId, step); }
+
+    public async Task ReportRunLog(RunLog logLines) { await EnsureCertificateActiveAsync(); await runs.LogAsync(ServerId, logLines); }
+
+    /// <summary>True = stored; the agent may forget the result.</summary>
+    public async Task<bool> ReportRunCompleted(RunCompleted result) { await EnsureCertificateActiveAsync(); return await runs.CompletedAsync(ServerId, result); }
+
+    public async Task ReportMaskedFile(MaskedFileResult result) { await EnsureCertificateActiveAsync(); pending.CompleteMasked(ServerId, result); }
 
     private async Task EnsureCertificateActiveAsync()
     {

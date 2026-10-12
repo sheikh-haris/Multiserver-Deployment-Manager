@@ -9,6 +9,7 @@ using IisControlCenter.Data;
 using IisControlCenter.Web.Agents;
 using IisControlCenter.Web.Auth;
 using IisControlCenter.Web.Components;
+using IisControlCenter.Web.Deployments;
 using IisControlCenter.Web.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -115,9 +116,27 @@ builder.Services.AddScoped<TargetService>();
 builder.Services.AddScoped<DriftQueries>();
 builder.Services.AddHostedService<AgentMonitor>();
 
+// ---------- deployments ----------
+builder.Services.Configure<DeploymentOptions>(builder.Configuration.GetSection(DeploymentOptions.Section));
+builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOptions.Section));
+builder.Services.AddSingleton<IPackageStore, FilePackageStore>();
+builder.Services.AddSingleton<IPortalAntivirus, DefenderPortalAntivirus>();
+builder.Services.AddSingleton<PendingAgentResults>();
+builder.Services.AddSingleton<DeploymentEventBus>();
+builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
+builder.Services.AddScoped<UploadService>();
+builder.Services.AddScoped<DiffService>();
+builder.Services.AddScoped<ProtectedListService>();
+builder.Services.AddScoped<NotificationService>();
+builder.Services.AddScoped<DeploymentService>();
+builder.Services.AddScoped<DeploymentOrchestrator>();
+builder.Services.AddScoped<RunReportService>();
+builder.Services.AddScoped<MaintenanceService>();
+builder.Services.AddHostedService<DeploymentWorker>();
+
 builder.Services.AddSignalR(o =>
 {
-    o.MaximumReceiveMessageSize = 4 * 1024 * 1024;     // discovery payloads
+    o.MaximumReceiveMessageSize = 4 * 1024 * 1024;     // discovery payloads and log batches (packages and manifests go over HTTPS)
     o.KeepAliveInterval = TimeSpan.FromSeconds(15);
     o.ClientTimeoutInterval = TimeSpan.FromSeconds(60);
 });
@@ -185,6 +204,8 @@ app.MapPost(ContractInfo.Routes.Register, async (RegisterRequest req, ServerServ
     var r = await svc.RegisterAgentAsync(req, ctx.Connection.RemoteIpAddress?.ToString(), presented);
     return r.Ok ? Results.Ok(r.Value) : Results.BadRequest(new { error = r.Error });
 }).AllowAnonymous().RequireRateLimiting("register").DisableAntiforgery().WithMetadata(new RequestSizeLimitAttribute(64 * 1024));
+
+app.MapDeploymentEndpoints();
 
 app.MapHub<AgentHub>(ContractInfo.Routes.AgentHub);   // [Authorize(AgentCert)] is on the hub. No AllowAnonymous here: it would override it.
 
