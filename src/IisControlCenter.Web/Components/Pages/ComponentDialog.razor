@@ -1,0 +1,51 @@
+@inject ActorProvider Actors
+@inject ProjectService Projects
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" @bind-Value="_name" Label="Component name" Immediate="true" Class="mb-2" HelperText="One separately deployable application, for example Web Frontend or Backend API." />
+        <MudSelect T="string" @bind-Value="_type" Label="Type" Class="mb-2">
+            @foreach (var t in new[] { "Web", "Api", "MobileApi", "Other" }) { <MudSelectItem Value="@t">@t</MudSelectItem> }
+        </MudSelect>
+        <MudTextField T="string" @bind-Value="_health" Label="Health check path" HelperText="Called after a deployment, for example /health" Class="mb-2" />
+        <MudTextField T="string" @bind-Value="_types" Label="Extra allowed file types (optional)" HelperText="By default .exe .bat .cmd .ps1 .msi are blocked in packages. List the ones this component may contain." Class="mb-2" />
+        <MudCheckBox T="bool" @bind-Value="_staging" Label="Require Staging before Production (blocks direct-to-Production uploads)" />
+        @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mt-3">@_error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save" Disabled="_busy">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public Guid ProjectId { get; set; }
+    [Parameter] public ComponentView? Existing { get; set; }
+    private string _name = "", _type = "Web", _health = "/", _types = "";
+    private bool _staging, _busy;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        if (Existing is null) return;
+        _name = Existing.Name; _type = Existing.Type; _health = Existing.HealthCheckPath; _types = Existing.AllowedFileTypes ?? ""; _staging = Existing.RequiresStagingBeforeProd;
+    }
+
+    private async Task Save()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            var a = await Actors.GetAsync();
+            OpResult r;
+            if (Existing is null)
+            {
+                var add = await Projects.AddComponentAsync(a, ProjectId, _name, _type, _health, _types, _staging);
+                r = add.Ok ? OpResult.Success() : OpResult.Fail(add.Error!);
+            }
+            else r = await Projects.UpdateComponentAsync(a, Existing.Id, _name, _type, _health, _types, _staging);
+            if (r.Ok) Dialog.Close(DialogResult.Ok(true)); else _error = r.Error;
+        }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        _busy = false;
+    }
+}

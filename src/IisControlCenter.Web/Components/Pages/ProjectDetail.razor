@@ -1,0 +1,269 @@
+@page "/projects/{Id:guid}"
+@attribute [Authorize]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject ProjectService Projects
+@inject MembershipService Members
+@inject TargetService Targets
+@inject ServerEventBus Bus
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>@(_view?.Project.Name ?? "Project")</PageTitle>
+
+@if (_loaded && _view is null)
+{
+    <MudAlert Severity="Severity.Warning">Project not found, or you do not have access to it.</MudAlert>
+}
+else if (_view is not null)
+{
+    var p = _view.Project;
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2" Wrap="Wrap.Wrap">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="@(() => Nav.NavigateTo("/projects"))" />
+        <MudText Typo="Typo.h4">@p.Name</MudText>
+        <StatusChip Status="@(p.IsActive ? "Active" : "Inactive")" />
+        <MudSpacer />
+        @if (_view.CanManage || _view.CanRequestLink)
+        {
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Link" OnClick="@(() => Nav.NavigateTo("/onboarding"))">Map an IIS item</MudButton>
+        }
+        @if (_view.CanManage)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="() => EditComponent(null)" Disabled="@(!p.IsActive)">Add component</MudButton>
+        }
+    </MudStack>
+    @if (!string.IsNullOrWhiteSpace(p.Description)) { <MudText Class="mb-2">@p.Description</MudText> }
+    @if (!string.IsNullOrEmpty(p.OwnerGroupName)) { <MudText Typo="Typo.caption" Class="d-block mb-3">Owner group: @p.OwnerGroupName</MudText> }
+
+    <MudTabs Elevation="1" Rounded="true" TabPanelsClass="pa-4">
+        <MudTabPanel Text="@($"Components ({_view.Components.Count})")">
+            @if (_view.Components.Count == 0)
+            {
+                <MudText>No components yet. A component is one separately deployable application, for example "Web Frontend".</MudText>
+            }
+            @foreach (var c in _view.Components)
+            {
+                <MudPaper Outlined="true" Class="pa-3 mb-3">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+                        <MudText Typo="Typo.h6">@c.Name</MudText>
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@c.Type</MudChip>
+                        <MudText Typo="Typo.caption">health: <span class="mono">@c.HealthCheckPath</span></MudText>
+                        @if (c.RequiresStagingBeforeProd) { <MudChip T="string" Size="Size.Small" Color="Color.Info">Staging required before Prod</MudChip> }
+                        <MudSpacer />
+                        @if (_view.CanManage)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="() => EditComponent(c)" title="Edit" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="() => RemoveComponent(c)" title="Remove" />
+                        }
+                    </MudStack>
+
+                    @if (c.Targets.Count == 0) { <MudText Class="mt-2" Typo="Typo.body2">No deployment targets yet.</MudText> }
+                    else
+                    {
+                        <MudSimpleTable Dense="true" Hover="true" Class="mt-2">
+                            <thead><tr><th>Env</th><th>Order</th><th>Server</th><th>Site / application</th><th>Folder</th><th>App pool</th><th>Status</th><th></th></tr></thead>
+                            <tbody>
+                            @foreach (var t in c.Targets)
+                            {
+                                <tr>
+                                    <td>@t.EnvironmentName</td>
+                                    <td>
+                                        @t.DeployOrder
+                                        @if (_view.CanManage && c.Targets.Count(x => x.EnvironmentName == t.EnvironmentName) > 1)
+                                        {
+                                            <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small" OnClick="() => Move(t, true)" />
+                                            <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small" OnClick="() => Move(t, false)" />
+                                        }
+                                    </td>
+                                    <td>@t.ServerName</td>
+                                    <td>@t.IisSiteName@(t.AppPath == "/" ? "" : t.AppPath)</td>
+                                    <td class="mono">@t.PhysicalPath</td>
+                                    <td>@t.AppPoolName @if (t.HasException) { <MudTooltip Text="Shared pool allowed by a recorded admin exception"><MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Color="Color.Warning" /></MudTooltip> }</td>
+                                    <td>
+                                        <MudTooltip Text="@(t.StatusDetail ?? "")" Disabled="@string.IsNullOrEmpty(t.StatusDetail)"><StatusChip Status="@t.Status.ToString()" /></MudTooltip>
+                                        @if (!string.IsNullOrEmpty(t.StatusDetail)) { <MudText Typo="Typo.caption" Class="d-block" Style="max-width:260px">@t.StatusDetail</MudText> }
+                                    </td>
+                                    <td>
+                                        @if (_view.CanManage)
+                                        {
+                                            <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small">
+                                                @if (t.Status is TargetStatus.Drifted or TargetStatus.Missing) { <MudMenuItem OnClick="() => Accept(t)">Accept what IIS has now</MudMenuItem> }
+                                                <MudMenuItem OnClick="() => Disable(t)">@(t.Status == TargetStatus.Disabled ? "Enable" : "Disable")</MudMenuItem>
+                                                <MudMenuItem OnClick="() => RemoveTarget(t)">Remove link</MudMenuItem>
+                                            </MudMenu>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                            </tbody>
+                        </MudSimpleTable>
+                    }
+                    <MudExpansionPanels Class="mt-2" Elevation="0">
+                        <MudExpansionPanel Text="Protected paths (used by deployments from Phase 3)">
+                            <MudText Typo="Typo.caption">Config files are copied only if they do not exist on the target. Data folders are never overwritten, never deleted and never backed up.</MudText>
+                            @foreach (var pp in c.ProtectedPaths)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="@(pp.Kind == ProtectedPathKind.DataFolder ? Color.Error : Color.Default)" Variant="Variant.Outlined">@(pp.Kind == ProtectedPathKind.DataFolder ? "data" : "config"): @pp.Path</MudChip>
+                            }
+                        </MudExpansionPanel>
+                    </MudExpansionPanels>
+                </MudPaper>
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="@($"Members ({_members.Count})")">
+            <MudStack Row="true" Class="mb-3" AlignItems="AlignItems.Center">
+                <MudText Typo="Typo.body2">Roles are given per environment. Prefer groups. Individual users need an expiry date.</MudText>
+                <MudSpacer />
+                @if (_view.CanManageMembers) { <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PersonAdd" OnClick="Grant">Add member</MudButton> }
+            </MudStack>
+
+            <MudSimpleTable Dense="true" Class="mb-4">
+                <thead><tr><th>Role</th>@foreach (var e in _view.VisibleEnvironments) { <th>@e</th> }</tr></thead>
+                <tbody>
+                @foreach (var role in new[] { Role.ProjectViewer, Role.Deployer, Role.Approver })
+                {
+                    <tr>
+                        <td><b>@role</b></td>
+                        @foreach (var e in _view.VisibleEnvironments)
+                        {
+                            <td>@foreach (var m in _members.Where(m => m.Role == role && m.EnvironmentName == e && !m.Expired)) { <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@m.PrincipalName</MudChip> }</td>
+                        }
+                    </tr>
+                }
+                <tr><td><b>ProjectOwner</b></td><td colspan="@Math.Max(1, _view.VisibleEnvironments.Count)">@foreach (var m in _members.Where(m => m.Role == Role.ProjectOwner)) { <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@m.PrincipalName</MudChip> }</td></tr>
+                </tbody>
+            </MudSimpleTable>
+
+            <MudSimpleTable Dense="true" Hover="true">
+                <thead><tr><th>Who</th><th>Type</th><th>Role</th><th>Environment</th><th>Expires</th><th>Granted by</th><th></th></tr></thead>
+                <tbody>
+                @foreach (var m in _members)
+                {
+                    <tr>
+                        <td>@m.PrincipalName <span class="mono">(@m.PrincipalId)</span></td><td>@m.PrincipalType</td><td>@m.Role</td><td>@(m.EnvironmentName ?? "All")</td>
+                        <td>@if (m.ExpiresAt is null) { <span>never</span> } else { <span>@m.ExpiresAt.Value.ToLocalTime().ToString("d")</span> @if (m.Expired) { <StatusChip Status="Expired" /> } }</td>
+                        <td>@m.GrantedBy</td>
+                        <td>@if (m.CanRevoke && _view.CanManageMembers) { <MudButton Size="Size.Small" Color="Color.Error" OnClick="() => RevokeMember(m)">Revoke</MudButton> }</td>
+                    </tr>
+                }
+                </tbody>
+            </MudSimpleTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="History">
+            <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined">Deployment history and logs appear here from Phase 3.</MudAlert>
+        </MudTabPanel>
+
+        @if (_view.CanManage)
+        {
+            <MudTabPanel Text="Settings">
+                <MudText Typo="Typo.subtitle1" Class="mb-1">Direct to Production approvers</MudText>
+                <MudText Typo="Typo.body2" Class="mb-2">How many different approvers a direct-to-Production deployment needs (Phase 3).</MudText>
+                <MudToggleGroup T="int" Value="p.ProdApproversRequired" ValueChanged="SetProdApprovers" Color="Color.Primary" Class="mb-4">
+                    <MudToggleItem Value="1" Text="1 approver" /><MudToggleItem Value="2" Text="2 approvers" />
+                </MudToggleGroup>
+
+                <MudText Typo="Typo.subtitle1" Class="mb-1">Self-approval</MudText>
+                <MudText Typo="Typo.body2" Class="mb-2">Off by default. When on, a person who holds both Deployer and Approver may approve their own request in that environment. Every approval is audited; self-approved ones are badged and reported.</MudText>
+                @foreach (var kv in _view.SelfApproval)
+                {
+                    var env = kv.Key;
+                    <MudSwitch T="bool" Value="kv.Value" ValueChanged="@((bool v) => SetSelf(env, v))" Color="@(env == "Prod" ? Color.Error : Color.Primary)" Label="@($"Allow self-approval on {env}")" />
+                }
+
+                <MudDivider Class="my-4" />
+                <MudStack Row="true">
+                    <MudButton Variant="Variant.Outlined" OnClick="Rename">Rename / edit description</MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="@(p.IsActive ? Color.Error : Color.Success)" OnClick="ToggleActive">@(p.IsActive ? "Deactivate project" : "Reactivate project")</MudButton>
+                </MudStack>
+            </MudTabPanel>
+        }
+    </MudTabs>
+}
+else { <MudProgressLinear Indeterminate="true" /> }
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private ProjectView? _view;
+    private IReadOnlyList<MemberRow> _members = [];
+    private Actor? _actor;
+    private bool _loaded;
+
+    protected override void OnInitialized() => Bus.Changed += OnChanged;
+    protected override async Task OnParametersSetAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        _actor = await Actors.GetAsync();
+        _view = await Projects.GetAsync(_actor, Id);
+        try { _members = _view is null ? [] : await Members.ListAsync(_actor, Id); } catch (ForbiddenException) { _members = []; }
+        _loaded = true;
+    }
+
+    private void OnChanged(ServerChanged e) => _ = InvokeAsync(async () => { await Reload(); StateHasChanged(); });
+
+    private async Task Run(Func<Task<OpResult>> action, string ok)
+    {
+        try { var r = await action(); Snackbar.Add(r.Ok ? ok : r.Error ?? "Failed", r.Ok ? Severity.Success : Severity.Error); }
+        catch (ForbiddenException ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        await Reload();
+    }
+
+    private async Task EditComponent(ComponentView? c)
+    {
+        var dlg = await Dialogs.ShowAsync<ComponentDialog>(c is null ? "Add component" : "Edit component",
+            new DialogParameters<ComponentDialog> { { x => x.ProjectId, Id }, { x => x.Existing, c } }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        if ((await dlg.Result) is { Canceled: false }) await Reload();
+    }
+
+    private async Task RemoveComponent(ComponentView c)
+    {
+        if (!await Confirm("Remove component", $"Remove the component and its protected path list? It must have no targets.", c.Name, "Remove")) return;
+        await Run(() => Projects.RemoveComponentAsync(_actor!, c.Id), "Component removed.");
+    }
+
+    private Task Move(TargetView t, bool up) => Run(() => Targets.MoveAsync(_actor!, t.Id, up), "Order changed.");
+    private Task Accept(TargetView t) => Run(() => Targets.AcceptCurrentAsync(_actor!, t.Id), "Accepted. The target is active again.");
+    private Task Disable(TargetView t) => Run(() => Targets.SetDisabledAsync(_actor!, t.Id, t.Status != TargetStatus.Disabled), t.Status == TargetStatus.Disabled ? "Enabled." : "Disabled.");
+
+    private async Task RemoveTarget(TargetView t)
+    {
+        if (!await Confirm("Remove link", $"This only removes the link in the portal. The IIS site is not touched.", t.IisSiteName, "Remove link")) return;
+        await Run(() => Targets.RemoveAsync(_actor!, t.Id), "Link removed.");
+    }
+
+    private async Task Grant()
+    {
+        var dlg = await Dialogs.ShowAsync<GrantRoleDialog>("Add member", new DialogParameters<GrantRoleDialog> { { x => x.ProjectId, Id }, { x => x.IsPlatformAdmin, _actor!.Can(Permission.ManageProjects) } },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        if ((await dlg.Result) is { Canceled: false }) { Snackbar.Add("Role granted.", Severity.Success); await Reload(); }
+    }
+
+    private async Task RevokeMember(MemberRow m)
+    {
+        if (!await Confirm("Revoke role", $"Remove {m.Role} from {m.PrincipalName}?", m.PrincipalName, "Revoke")) return;
+        await Run(() => Members.RevokeAsync(_actor!, m.Id), "Role revoked.");
+    }
+
+    private Task SetProdApprovers(int n) => Run(() => Projects.SetProdApproversAsync(_actor!, Id, n), "Saved.");
+    private Task SetSelf(string env, bool on) => Run(() => Projects.SetSelfApprovalAsync(_actor!, Id, env, on), on ? $"Self-approval is ON for {env}. This is audited." : "Saved.");
+    private Task ToggleActive() => Run(() => Projects.SetActiveAsync(_actor!, Id, !_view!.Project.IsActive), "Saved.");
+
+    private async Task Rename()
+    {
+        var dlg = await Dialogs.ShowAsync<RenameProjectDialog>("Edit project", new DialogParameters<RenameProjectDialog> { { x => x.ProjectId, Id }, { x => x.CurrentName, _view!.Project.Name }, { x => x.CurrentDescription, _view.Project.Description } },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        if ((await dlg.Result) is { Canceled: false }) await Reload();
+    }
+
+    private async Task<bool> Confirm(string title, string message, string confirmText, string button)
+    {
+        var dlg = await Dialogs.ShowAsync<ConfirmDangerDialog>(title, new DialogParameters<ConfirmDangerDialog>
+        { { x => x.Message, message }, { x => x.ConfirmText, confirmText }, { x => x.ButtonText, button } }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        return (await dlg.Result) is { Canceled: false };
+    }
+
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

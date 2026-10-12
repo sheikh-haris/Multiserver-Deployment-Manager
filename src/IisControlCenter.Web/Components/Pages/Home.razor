@@ -60,6 +60,8 @@ else
                 }
             </MudPaper>
         </MudItem>
+        <MudItem xs="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.overline">Open drift</MudText><MudText Typo="Typo.h4" Color="@(_data.OpenDrift > 0 ? Color.Warning : Color.Default)">@_data.OpenDrift</MudText><MudLink Href="/drift">View</MudLink></MudPaper></MudItem>
+        <MudItem xs="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.overline">Blocked targets</MudText><MudText Typo="Typo.h4" Color="@(_data.BlockedTargets > 0 ? Color.Error : Color.Default)">@_data.BlockedTargets</MudText><MudText Typo="Typo.caption" Class="d-block">Missing or drifted in IIS</MudText></MudPaper></MudItem>
         <MudItem xs="12">
             <MudAlert Severity="Severity.Normal" Variant="Variant.Outlined">Pending approvals and recent deployments will appear here from Phase 3.</MudAlert>
         </MudItem>

@@ -10,7 +10,9 @@ public sealed record ServerRow(Guid Id, string Name, string? Hostname, string? E
     string Mode, AgentStatus AgentStatus, DateTimeOffset? LastSeenAt, DateTimeOffset? LastDiscoveryAt, string? AgentVersion, bool IsDomainJoined);
 
 public sealed record DashboardData(int Total, int Pending, int Online, int Offline,
-    IReadOnlyList<ServerRow> OfflineServers, IReadOnlyList<ReportCert> ExpiringCerts);
+    IReadOnlyList<ServerRow> OfflineServers, IReadOnlyList<ReportCert> ExpiringCerts, int OpenDrift = 0, int BlockedTargets = 0);
+
+public sealed record AgentCertRow(string Thumbprint, CertificateStatus Status, DateTimeOffset NotAfter, DateTimeOffset CreatedAt, int DaysLeft);
 
 public sealed class ServerQueries(IDbContextFactory<AppDbContext> dbf, TimeProvider clock)
 {
@@ -90,6 +92,15 @@ public sealed class ServerQueries(IDbContextFactory<AppDbContext> dbf, TimeProvi
         return (report, servers.ToDictionary(s => s.Id, s => s.Name));
     }
 
+    public async Task<IReadOnlyList<AgentCertRow>> GetAgentCertificatesAsync(Actor actor, Guid serverId)
+    {
+        if (await GetAsync(actor, serverId) is null) return [];
+        await using var db = await dbf.CreateDbContextAsync();
+        var now = clock.GetUtcNow();
+        var rows = await db.AgentCertificates.AsNoTracking().Where(c => c.ServerId == serverId).OrderByDescending(c => c.CreatedAt).ToListAsync();
+        return rows.Select(c => new AgentCertRow(c.Thumbprint, c.Status, c.NotAfter, c.CreatedAt, (int)Math.Floor((c.NotAfter - now).TotalDays))).ToList();
+    }
+
     public async Task<DashboardData> GetDashboardAsync(Actor actor)
     {
         Require(actor);
@@ -99,10 +110,18 @@ public sealed class ServerQueries(IDbContextFactory<AppDbContext> dbf, TimeProvi
         IReadOnlyList<ReportCert> certs = [];
         if (actor.Can(Permission.ViewDiscoveryReport))
             certs = (await GetReportAsync(actor)).Report.ExpiringCertificates.Take(10).ToList();
+        var (drift, blocked) = (0, 0);
+        {
+            var allowed = actor.Access.AllowedEnvironments(Permission.ViewServers)?.ToList();
+            var d = from x in db.DriftEvents.AsNoTracking() join sv in db.Servers.AsNoTracking() on x.ServerId equals sv.Id where x.AcknowledgedAt == null select sv.EnvironmentName;
+            var t = from x in db.DeploymentTargets.AsNoTracking() where x.Status == TargetStatus.Missing || x.Status == TargetStatus.Drifted select x.EnvironmentName;
+            if (allowed is not null) { d = d.Where(e => e != null && allowed.Contains(e)); t = t.Where(e => allowed.Contains(e)); }
+            drift = await d.CountAsync(); blocked = await t.CountAsync();
+        }
         return new DashboardData(servers.Count,
             servers.Count(s => s.AgentStatus == AgentStatus.Pending),
             servers.Count(s => s.AgentStatus == AgentStatus.Online),
-            offline.Count, offline, certs);
+            offline.Count, offline, certs, drift, blocked);
     }
 
     private static void Require(Actor a)

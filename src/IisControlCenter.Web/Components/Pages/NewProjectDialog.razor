@@ -1,0 +1,33 @@
+@inject ActorProvider Actors
+@inject ProjectService Projects
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" @bind-Value="_name" Label="Project name" Immediate="true" Class="mb-2" />
+        <MudTextField T="string" @bind-Value="_desc" Label="Description (optional)" Lines="2" Class="mb-2" />
+        <MudText Typo="Typo.subtitle2">Owner group (optional)</MudText>
+        <MudText Typo="Typo.caption" Class="d-block mb-2">The Entra group that will be Project Owner. Owners manage members up to Deployer and can request component links.</MudText>
+        <MudStack Row="true"><MudTextField T="string" @bind-Value="_groupId" Label="Group object id" /><MudTextField T="string" @bind-Value="_groupName" Label="Group name" /></MudStack>
+        @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mt-3">@_error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save" Disabled="_busy">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    private string _name = "", _desc = "", _groupId = "", _groupName = "";
+    private string? _error; private bool _busy;
+
+    private async Task Save()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            var r = await Projects.CreateAsync(await Actors.GetAsync(), _name, _desc, _groupId, _groupName);
+            if (r.Ok) Dialog.Close(DialogResult.Ok(r.Value)); else _error = r.Error;
+        }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        _busy = false;
+    }
+}

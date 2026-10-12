@@ -1,7 +1,7 @@
 # IIS Control Center
 
 Internal portal to manage IIS across many Windows servers and (from Phase 3) deploy code to them with approval.
-Design: [docs/DESIGN.md](docs/DESIGN.md). Phase 1 review notes: [docs/PHASE1.md](docs/PHASE1.md).
+Design: [docs/DESIGN.md](docs/DESIGN.md). Review notes: [Phase 1](docs/PHASE1.md), [Phase 2](docs/PHASE2.md).
 
 ```
 src/IisControlCenter.Contracts   messages shared by portal and agent
@@ -38,6 +38,11 @@ Development mode uses SQLite, a "pick a person" sign-in page, and no Hangfire. I
 
 Apply the database once: `dotnet ef database update -p src/IisControlCenter.Data` (using a migration account), then run `db/permissions.sql`.
 
+## Try the whole flow without Windows
+
+Development mode only. Run the portal (above), then in `src/IisControlCenter.Agent` use `dotnet run -- register ...` and `dotnet run`.
+On non-Windows machines the agent returns fake IIS data; set `ICC_SAMPLE_VARIANT=2` to imitate someone changing IIS Manager by hand and watch **Drift**.
+
 ## Install an agent
 
 1. Portal: **Servers → Add server**. Copy the one-time token (valid 1 hour).
@@ -55,4 +60,5 @@ Build the agent: `dotnet publish src/IisControlCenter.Agent -c Release -r win-x6
 dotnet test --filter "FullyQualifiedName!~IntegrationTests"      # unit tests, any OS
 dotnet test tests/IisControlCenter.Agent.IntegrationTests        # needs Windows + IIS + Administrator; skipped elsewhere
 ```
-CI (`.github/workflows/ci.yml`) runs both: the integration job installs IIS on a GitHub Windows runner.
+CI (`.github/workflows/ci.yml`) runs three jobs: Linux unit tests; a Windows job with IIS (integration tests, single-file agent, installer checks);
+and a Windows end-to-end job that runs the real installer, starts a portal on the runner, and checks registration, approval, discovery, restart and uninstall.

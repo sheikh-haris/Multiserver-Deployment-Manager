@@ -21,14 +21,16 @@ public sealed class AgentWorker(
     private static readonly TimeSpan RetryAfterRejection = TimeSpan.FromMinutes(5);
     private HubConnection? _hub;
     private volatile bool _stop;
+    private System.Security.Cryptography.X509Certificates.X509Certificate2 _cert = default!;
+    private static readonly TimeSpan RenewWhenLeft = RenewalPolicy.DefaultWindow;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         log.LogInformation("Agent {Version} starting. Environment {Env}. Allowed roots: {Roots}",
             AgentInfo.Version, config.Environment, string.Join(", ", config.AllowedRoots));
 
-        var cert = AgentCertificates.Load(config.CertThumbprint);
-        _hub = BuildConnection(cert);
+        _cert = AgentCertificates.Load(config.CertThumbprint);
+        _hub = BuildConnection(_cert);
         Wire(_hub);
 
         var attempt = 0;
@@ -36,7 +38,7 @@ public sealed class AgentWorker(
         {
             try
             {
-                if (_hub.State == HubConnectionState.Disconnected)
+                if (_hub!.State == HubConnectionState.Disconnected)
                 {
                     await _hub.StartAsync(ct);
                     attempt = 0;
@@ -48,6 +50,7 @@ public sealed class AgentWorker(
                         continue;
                     }
                     log.LogInformation("Connected to portal.");
+                    if (await TryRenewCertificateAsync(ct)) continue;   // reconnect right away with the new certificate
                 }
                 else if (_hub.State == HubConnectionState.Connected)
                 {
@@ -66,6 +69,49 @@ public sealed class AgentWorker(
         }
 
         if (_hub is not null) await _hub.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Replaces the client certificate before it expires. A new key pair is made on this server, the portal pins it,
+    /// and the agent reconnects with it. The old certificate keeps working until the new one has been used once.
+    /// Returns true when the agent switched certificates and must reconnect.
+    /// </summary>
+    private async Task<bool> TryRenewCertificateAsync(CancellationToken ct)
+    {
+        var left = _cert.NotAfter.ToUniversalTime() - clock.GetUtcNow().UtcDateTime;
+        var window = RenewWhenLeft;
+#if DEBUG
+        if (int.TryParse(Environment.GetEnvironmentVariable("ICC_DEV_RENEW_DAYS"), out var devDays)) window = TimeSpan.FromDays(devDays);   // lets a developer see renewal happen
+#endif
+        if (!RenewalPolicy.ShouldRenew(_cert.NotBefore.ToUniversalTime(), _cert.NotAfter.ToUniversalTime(), clock.GetUtcNow().UtcDateTime, window)) return false;
+        try
+        {
+            log.LogInformation("Agent certificate expires in {Days} days. Renewing.", (int)left.TotalDays);
+            var fresh = AgentCertificates.CreateAndInstall(Environment.MachineName);
+            var thumb = AgentCertificates.Sha256Thumbprint(fresh);
+            var accepted = await _hub!.InvokeAsync<string?>("RenewCertificate", Convert.ToBase64String(fresh.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Cert)), ct);
+            if (!string.Equals(accepted, thumb, StringComparison.OrdinalIgnoreCase))
+            {
+                AgentCertificates.Remove(thumb);
+                log.LogWarning("The portal refused the certificate renewal. Will try again on the next connection.");
+                return false;
+            }
+            var oldThumb = config.CertThumbprint;
+            config.CertThumbprint = thumb;
+            config.Save(config.SourcePath);
+            await _hub!.StopAsync(CancellationToken.None);
+            await _hub!.DisposeAsync();
+            _cert = fresh;
+            _hub = BuildConnection(_cert);
+            Wire(_hub);
+            log.LogInformation("Switched to the new certificate. Old one ({Old}…) stays in the store until the portal retires it.", oldThumb[..Math.Min(8, oldThumb.Length)]);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning("Certificate renewal failed: {Message}. Will try again on the next connection.", ex.Message);
+            return false;
+        }
     }
 
     private HubConnection BuildConnection(System.Security.Cryptography.X509Certificates.X509Certificate2 cert)

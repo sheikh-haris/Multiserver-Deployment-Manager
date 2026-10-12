@@ -16,6 +16,9 @@ public sealed class AgentConfig
     public Guid ServerId { get; set; }
     public string CertThumbprint { get; set; } = "";
 
+    /// <summary>Where this config was loaded from, so it can be saved back (certificate renewal).</summary>
+    [JsonIgnore] public string? SourcePath { get; private set; }
+
     public static readonly string[] KnownEnvironments = ["Dev", "Staging", "Prod"];
 
     public static string DefaultDirectory =>
@@ -33,6 +36,7 @@ public sealed class AgentConfig
                   ?? throw new InvalidOperationException("Config file is empty.");
         var problems = cfg.Validate();
         if (problems.Count > 0) throw new InvalidOperationException("Invalid agent config: " + string.Join("; ", problems));
+        cfg.SourcePath = path;
         return cfg;
     }
 

@@ -1,0 +1,168 @@
+@page "/onboarding"
+@attribute [Authorize]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject TargetService Targets
+@inject ServerQueries ServerQueries
+@inject ServerEventBus Bus
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+<PageTitle>Onboarding</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-1">Onboarding</MudText>
+<MudText Typo="Typo.body2" Class="mb-3">
+    Map what was found in IIS to a Project, Component and Environment. The tool may suggest a mapping from the host name and folder,
+    but nothing is saved until a person confirms it. The environment always comes from the server.
+</MudText>
+
+@if (_denied) { <MudAlert Severity="Severity.Warning">Only Platform Admins and Project Owners can use this page.</MudAlert> }
+else
+{
+    <MudTabs Elevation="1" Rounded="true" TabPanelsClass="pa-4">
+        <MudTabPanel Text="Discovered items">
+            <MudDataGrid @ref="_grid" T="Candidate" ServerData="Load" Dense="true" Hover="true" Filterable="false" SortMode="SortMode.None">
+                <ToolBarContent>
+                    <MudTextField T="string" Value="_search" ValueChanged="OnSearch" Placeholder="Search site, folder, host, pool, server" Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true" DebounceInterval="300" Class="mr-3" />
+                    <MudSwitch T="bool" Value="_onlyUnassigned" ValueChanged="OnOnly" Label="Only unassigned" Color="Color.Primary" />
+                </ToolBarContent>
+                <Columns>
+                    <TemplateColumn Title="Server"><CellTemplate>@context.Item.ServerName <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@context.Item.Environment</MudChip></CellTemplate></TemplateColumn>
+                    <TemplateColumn Title="Site / application"><CellTemplate><b>@context.Item.SiteName</b>@(context.Item.AppPath == "/" ? "" : context.Item.AppPath)</CellTemplate></TemplateColumn>
+                    <TemplateColumn Title="Folder"><CellTemplate><span class="mono">@context.Item.PhysicalPath</span></CellTemplate></TemplateColumn>
+                    <PropertyColumn Property="x => x.AppPoolName" Title="App pool" />
+                    <TemplateColumn Title="Hosts"><CellTemplate>@string.Join(", ", context.Item.Hosts)</CellTemplate></TemplateColumn>
+                    <TemplateColumn Title="Mapping">
+                        <CellTemplate>
+                            @if (context.Item.IsMapped) { <StatusChip Status="Active" Text="@("Mapped: " + context.Item.MappedTo)" /> }
+                            else
+                            {
+                                <StatusChip Status="Unassigned" />
+                                @if (context.Item.Suggestion.Confidence != Confidence.None)
+                                {
+                                    <MudTooltip Text="@context.Item.Suggestion.Reason">
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(context.Item.Suggestion.Confidence == Confidence.High ? Color.Success : Color.Info)">
+                                            Suggestion: @context.Item.Suggestion.ProjectName@(context.Item.Suggestion.ComponentName is null ? "" : " / " + context.Item.Suggestion.ComponentName)
+                                        </MudChip>
+                                    </MudTooltip>
+                                }
+                            }
+                        </CellTemplate>
+                    </TemplateColumn>
+                    <TemplateColumn Title="">
+                        <CellTemplate>
+                            @if (!context.Item.IsMapped) { <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="() => Map(context.Item)">@(_isAdmin ? "Map…" : "Request…")</MudButton> }
+                        </CellTemplate>
+                    </TemplateColumn>
+                </Columns>
+                <PagerContent><MudDataGridPager T="Candidate" PageSizeOptions="@(new[] { 10, 25, 50, 100 })" /></PagerContent>
+                <NoRecordsContent><MudText Class="pa-4">Nothing found. Approve a server and let it run discovery first.</MudText></NoRecordsContent>
+            </MudDataGrid>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@($"Link requests ({_requests.Count(r => r.Status == LinkRequestStatus.Pending)} pending)")">
+            <MudSimpleTable Dense="true" Hover="true">
+                <thead><tr><th>Requested</th><th>Project / component</th><th>Environment</th><th>Server</th><th>Site / application</th><th>By</th><th>Reason</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                @foreach (var r in _requests)
+                {
+                    <tr>
+                        <td>@r.RequestedAt.ToLocalTime().ToString("g")</td><td>@r.ProjectName / @r.ComponentName</td><td>@r.EnvironmentName</td><td>@r.ServerName</td>
+                        <td>@r.SiteName@(r.AppPath == "/" ? "" : r.AppPath)</td><td>@r.RequestedBy</td><td>@r.Reason</td>
+                        <td><StatusChip Status="@r.Status.ToString()" /> @if (!string.IsNullOrEmpty(r.DecisionComment)) { <MudText Typo="Typo.caption" Class="d-block">@r.DecisionComment</MudText> }</td>
+                        <td>
+                            @if (r.Status == LinkRequestStatus.Pending)
+                            {
+                                @if (_isAdmin)
+                                {
+                                    <MudButton Size="Size.Small" Color="Color.Success" OnClick="() => Decide(r, true)">Approve</MudButton>
+                                    <MudButton Size="Size.Small" Color="Color.Error" OnClick="() => Decide(r, false)">Reject</MudButton>
+                                }
+                                <MudButton Size="Size.Small" OnClick="() => Cancel(r)">Cancel</MudButton>
+                            }
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </MudSimpleTable>
+        </MudTabPanel>
+    </MudTabs>
+}
+
+@code {
+    private MudDataGrid<Candidate> _grid = default!;
+    private string? _search;
+    private bool _onlyUnassigned = true, _isAdmin, _denied;
+    private IReadOnlyList<LinkRequestRow> _requests = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var a = await Actors.GetAsync();
+        _isAdmin = a.Can(Permission.ManageTargets);
+        try { await LoadRequests(); } catch (ForbiddenException) { _denied = true; }
+        _denied = _denied || (!_isAdmin && !a.Access.ActiveAssignments.Any(r => r.Role == Role.ProjectOwner));
+        Bus.Changed += OnChanged;
+    }
+
+    private async Task LoadRequests() => _requests = await Targets.ListRequestsAsync(await Actors.GetAsync(), false);
+
+    private async Task<GridData<Candidate>> Load(GridState<Candidate> s, CancellationToken ct)
+    {
+        try
+        {
+            var (rows, total) = await Targets.ListCandidatesAsync(await Actors.GetAsync(), null, _search, _onlyUnassigned, s.Page, s.PageSize);
+            return new GridData<Candidate> { Items = rows, TotalItems = total };
+        }
+        catch (ForbiddenException) { return new GridData<Candidate> { Items = [], TotalItems = 0 }; }
+    }
+
+    private Task OnSearch(string v) { _search = v; return _grid.ReloadServerData(); }
+    private Task OnOnly(bool v) { _onlyUnassigned = v; return _grid.ReloadServerData(); }
+
+    private async Task Map(Candidate c)
+    {
+        var dlg = await Dialogs.ShowAsync<MapDialog>(_isAdmin ? "Map to a component" : "Request a link", new DialogParameters<MapDialog> { { x => x.Item, c } },
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var res = await dlg.Result;
+        if (res is { Canceled: false, Data: string what })
+        {
+            Snackbar.Add(what == "linked" ? "Linked." : "Request sent to a Platform Admin.", Severity.Success);
+            await LoadRequests(); await _grid.ReloadServerData();
+        }
+    }
+
+    private async Task Decide(LinkRequestRow r, bool approve)
+    {
+        string? comment = null, exception = null;
+        if (!approve)
+        {
+            var dlg = await Dialogs.ShowAsync<ConfirmDangerDialog>("Reject request", new DialogParameters<ConfirmDangerDialog>
+            { { x => x.Message, "Tell the requester why." }, { x => x.ConfirmText, "reject" }, { x => x.ButtonText, "Reject" }, { x => x.RequireReason, true } }, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+            var res = await dlg.Result;
+            if (res is not { Canceled: false, Data: string reason }) return;
+            comment = reason;
+        }
+        try
+        {
+            var result = await Targets.DecideAsync(await Actors.GetAsync(), r.Id, approve, comment, exception);
+            Snackbar.Add(result.Ok ? (approve ? "Approved and linked." : "Rejected.") : result.Error ?? "Failed", result.Ok ? Severity.Success : Severity.Error);
+        }
+        catch (ForbiddenException ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        await LoadRequests(); await _grid.ReloadServerData();
+    }
+
+    private async Task Cancel(LinkRequestRow r)
+    {
+        try { var res = await Targets.CancelRequestAsync(await Actors.GetAsync(), r.Id); Snackbar.Add(res.Ok ? "Cancelled." : res.Error ?? "Failed", res.Ok ? Severity.Success : Severity.Error); }
+        catch (ForbiddenException ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        await LoadRequests(); StateHasChanged();
+    }
+
+    private void OnChanged(ServerChanged e)
+    {
+        if (e.Kind != ServerChangeKind.Discovery) return;
+        _ = InvokeAsync(async () => { if (_grid is not null) await _grid.ReloadServerData(); });
+    }
+
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

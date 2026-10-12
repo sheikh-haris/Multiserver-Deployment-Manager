@@ -154,6 +154,186 @@ namespace IisControlCenter.Data.Migrations
                     b.ToTable("AuditLog", (string)null);
                 });
 
+            modelBuilder.Entity("IisControlCenter.Core.Domain.Component", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AllowedFileTypes")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("HealthCheckPath")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("RequiresStagingBeforeProd")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("Components");
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.DeploymentTarget", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AppPath")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("AppPoolName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<Guid>("ComponentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("DeployOrder")
+                        .HasColumnType("int");
+
+                    b.Property<string>("EnvironmentName")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<long>("IisSiteId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("IisSiteName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<DateTimeOffset?>("LastVerifiedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("LinkExceptionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("PhysicalPath")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<Guid>("ServerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("StatusDetail")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EnvironmentName");
+
+                    b.HasIndex("LinkExceptionId");
+
+                    b.HasIndex("ComponentId", "EnvironmentName", "ServerId")
+                        .IsUnique();
+
+                    b.HasIndex("ServerId", "IisSiteId", "AppPath")
+                        .IsUnique();
+
+                    b.ToTable("DeploymentTargets");
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.DriftEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("AcknowledgedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("AcknowledgedBy")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("After")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("Before")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<DateTimeOffset>("DetectedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("ObjectRef")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("ObjectType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<Guid>("ServerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("TargetId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ServerId", "DetectedAt");
+
+                    b.ToTable("DriftEvents");
+                });
+
             modelBuilder.Entity("IisControlCenter.Core.Domain.EnvironmentDef", b =>
                 {
                     b.Property<string>("Name")
@@ -402,6 +582,211 @@ namespace IisControlCenter.Data.Migrations
                     b.ToTable("IisVirtualDirs");
                 });
 
+            modelBuilder.Entity("IisControlCenter.Core.Domain.LinkException", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("GrantedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("GrantedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("Violation")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("LinkExceptions");
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.LinkRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AppPath")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<Guid>("ComponentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("DecidedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("DecidedBy")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("DecisionComment")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("EnvironmentName")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<long>("IisSiteId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTimeOffset>("RequestedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("RequestedBy")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("RequestedById")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<Guid>("ServerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ComponentId");
+
+                    b.HasIndex("ServerId");
+
+                    b.ToTable("LinkRequests");
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.Project", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("OwnerGroupId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("OwnerGroupName")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<int>("ProdApproversRequired")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.HasIndex("Slug")
+                        .IsUnique();
+
+                    b.ToTable("Projects");
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.ProjectEnvironmentSetting", b =>
+                {
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("EnvironmentName")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<bool>("AllowSelfApproval")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("ProjectId", "EnvironmentName");
+
+                    b.HasIndex("EnvironmentName");
+
+                    b.ToTable("ProjectEnvironmentSettings");
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.ProtectedPath", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ComponentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("Path")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ComponentId");
+
+                    b.ToTable("ProtectedPaths");
+                });
+
             modelBuilder.Entity("IisControlCenter.Core.Domain.RegistrationToken", b =>
                 {
                     b.Property<Guid>("Id")
@@ -503,6 +888,8 @@ namespace IisControlCenter.Data.Migrations
                     b.HasIndex("EnvironmentName");
 
                     b.HasIndex("PrincipalId");
+
+                    b.HasIndex("ProjectId");
 
                     b.ToTable("RoleAssignments");
                 });
@@ -653,6 +1040,50 @@ namespace IisControlCenter.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("IisControlCenter.Core.Domain.Component", b =>
+                {
+                    b.HasOne("IisControlCenter.Core.Domain.Project", null)
+                        .WithMany("Components")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.DeploymentTarget", b =>
+                {
+                    b.HasOne("IisControlCenter.Core.Domain.Component", null)
+                        .WithMany("Targets")
+                        .HasForeignKey("ComponentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("IisControlCenter.Core.Domain.EnvironmentDef", null)
+                        .WithMany()
+                        .HasForeignKey("EnvironmentName")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("IisControlCenter.Core.Domain.LinkException", null)
+                        .WithMany()
+                        .HasForeignKey("LinkExceptionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("IisControlCenter.Core.Domain.Server", null)
+                        .WithMany()
+                        .HasForeignKey("ServerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.DriftEvent", b =>
+                {
+                    b.HasOne("IisControlCenter.Core.Domain.Server", null)
+                        .WithMany()
+                        .HasForeignKey("ServerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("IisControlCenter.Core.Domain.IisAppPool", b =>
                 {
                     b.HasOne("IisControlCenter.Core.Domain.Server", null)
@@ -707,6 +1138,45 @@ namespace IisControlCenter.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("IisControlCenter.Core.Domain.LinkRequest", b =>
+                {
+                    b.HasOne("IisControlCenter.Core.Domain.Component", null)
+                        .WithMany()
+                        .HasForeignKey("ComponentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("IisControlCenter.Core.Domain.Server", null)
+                        .WithMany()
+                        .HasForeignKey("ServerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.ProjectEnvironmentSetting", b =>
+                {
+                    b.HasOne("IisControlCenter.Core.Domain.EnvironmentDef", null)
+                        .WithMany()
+                        .HasForeignKey("EnvironmentName")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("IisControlCenter.Core.Domain.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.ProtectedPath", b =>
+                {
+                    b.HasOne("IisControlCenter.Core.Domain.Component", null)
+                        .WithMany("ProtectedPaths")
+                        .HasForeignKey("ComponentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("IisControlCenter.Core.Domain.RegistrationToken", b =>
                 {
                     b.HasOne("IisControlCenter.Core.Domain.Server", null)
@@ -721,6 +1191,11 @@ namespace IisControlCenter.Data.Migrations
                     b.HasOne("IisControlCenter.Core.Domain.EnvironmentDef", null)
                         .WithMany()
                         .HasForeignKey("EnvironmentName")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("IisControlCenter.Core.Domain.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 
@@ -741,6 +1216,13 @@ namespace IisControlCenter.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("IisControlCenter.Core.Domain.Component", b =>
+                {
+                    b.Navigation("ProtectedPaths");
+
+                    b.Navigation("Targets");
+                });
+
             modelBuilder.Entity("IisControlCenter.Core.Domain.IisApplication", b =>
                 {
                     b.Navigation("VirtualDirs");
@@ -751,6 +1233,11 @@ namespace IisControlCenter.Data.Migrations
                     b.Navigation("Applications");
 
                     b.Navigation("Bindings");
+                });
+
+            modelBuilder.Entity("IisControlCenter.Core.Domain.Project", b =>
+                {
+                    b.Navigation("Components");
                 });
 #pragma warning restore 612, 618
         }

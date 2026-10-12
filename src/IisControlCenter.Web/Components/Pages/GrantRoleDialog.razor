@@ -1,0 +1,53 @@
+@inject ActorProvider Actors
+@inject MembershipService Members
+<MudDialog>
+    <DialogContent>
+        <MudGrid>
+            <MudItem xs="12" md="4"><MudSelect T="PrincipalType" @bind-Value="_type" Label="Type"><MudSelectItem Value="PrincipalType.Group">Group</MudSelectItem><MudSelectItem Value="PrincipalType.User">User</MudSelectItem></MudSelect></MudItem>
+            <MudItem xs="12" md="4"><MudTextField T="string" @bind-Value="_id" Label="Object id (Entra)" Immediate="true" /></MudItem>
+            <MudItem xs="12" md="4"><MudTextField T="string" @bind-Value="_name" Label="Display name" /></MudItem>
+            <MudItem xs="12" md="4">
+                <MudSelect T="Role" @bind-Value="_role" Label="Role">
+                    @foreach (var r in Roles) { <MudSelectItem Value="r">@r</MudSelectItem> }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudSelect T="string" @bind-Value="_env" Label="Environment" Disabled="@(!ProjectRolePermissions.IsEnvironmentScoped(_role))" HelperText="@(ProjectRolePermissions.IsEnvironmentScoped(_role) ? "" : "Owners cover the whole project")">
+                    @foreach (var e in new[] { "Dev", "Staging", "Prod" }) { <MudSelectItem Value="@e">@e</MudSelectItem> }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" md="4"><MudDatePicker Label="@(_type == PrincipalType.User ? "Expires (required)" : "Expires (optional)")" @bind-Date="_expires" MinDate="DateTime.Today.AddDays(1)" Clearable="true" /></MudItem>
+        </MudGrid>
+        @if (_role == Role.Approver) { <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">Approvers cannot approve their own requests unless self-approval is switched on for that environment in the project settings.</MudAlert> }
+        @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mt-3">@_error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save" Disabled="_busy">Grant</MudButton>
+    </DialogActions>
+</MudDialog>
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public Guid ProjectId { get; set; }
+    [Parameter] public bool IsPlatformAdmin { get; set; }
+    private IEnumerable<Role> Roles => IsPlatformAdmin ? ProjectRolePermissions.ProjectRoles : [Role.ProjectViewer, Role.Deployer];
+    private PrincipalType _type = PrincipalType.Group;
+    private string _id = "", _name = "";
+    private Role _role = Role.ProjectViewer;
+    private string? _env = "Dev", _error;
+    private DateTime? _expires;
+    private bool _busy;
+
+    private async Task Save()
+    {
+        _busy = true; _error = null;
+        DateTimeOffset? exp = _expires is null ? null : new DateTimeOffset(_expires.Value.Date.AddDays(1).AddSeconds(-1), TimeZoneInfo.Local.GetUtcOffset(_expires.Value));
+        try
+        {
+            var r = await Members.GrantAsync(await Actors.GetAsync(), ProjectId, _type, _id, _name, _role, _env, exp);
+            if (r.Ok) Dialog.Close(DialogResult.Ok(true)); else _error = r.Error;
+        }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        _busy = false;
+    }
+}

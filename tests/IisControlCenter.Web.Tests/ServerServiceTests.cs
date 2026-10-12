@@ -358,17 +358,16 @@ public class ServerServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Existing_mapping_status_survives_a_new_discovery()
+    public async Task Mapping_status_is_recomputed_from_the_links_after_every_discovery()
     {
         var id = await t.ApprovedServer();
-        await t.Servers.StoreDiscoveryAsync(id, Result(Guid.NewGuid(), "a"));
-        await using (var db = t.Db.CreateDbContext())
-        {
-            (await db.IisSites.SingleAsync()).MappingStatus = MappingStatus.Mapped;
-            await db.SaveChangesAsync();
-        }
-        await t.Servers.StoreDiscoveryAsync(id, Result(Guid.NewGuid(), "a"));
-        Assert.Equal(MappingStatus.Mapped, (await t.Queries.GetInventoryAsync(t.Admin, id)).Sites.Single().MappingStatus);
+        await t.Servers.StoreDiscoveryAsync(id, Result(Guid.NewGuid(), "a", "b"));
+        var comp = await t.NewComponent(await t.NewProject());
+        await t.Link(comp, id, 1);
+        await t.Servers.StoreDiscoveryAsync(id, Result(Guid.NewGuid(), "a", "b"));
+        var sites = (await t.Queries.GetInventoryAsync(t.Admin, id)).Sites;
+        Assert.Equal(MappingStatus.Mapped, sites.Single(s => s.IisSiteId == 1).MappingStatus);
+        Assert.Equal(MappingStatus.Unassigned, sites.Single(s => s.IisSiteId == 2).MappingStatus);
     }
 
     [Fact]

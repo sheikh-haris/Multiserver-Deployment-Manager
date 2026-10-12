@@ -142,7 +142,7 @@ function New-RandomPassword {
 }
 
 # ------------------------------------------------------------------ uninstall
-if ($PSCmdlet.ParameterSetName -eq 'Uninstall') {
+if ($PSCmdlet.ParameterSetName -eq 'Uninstall' -and $Uninstall) {
     if (-not (Test-Admin)) { Fail 'Run this script as Administrator.' }
     Write-Step 'Stopping and removing the service'
     if (Get-Service $ServiceName -ErrorAction SilentlyContinue) {
@@ -252,10 +252,10 @@ if ($Gmsa) {
 $member = if ($Gmsa) { $Gmsa } else { "$env:COMPUTERNAME\svc-icc-$($Environment.ToLowerInvariant())" }
 $adminsGroup = (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate([Security.Principal.NTAccount]).Value.Split('\')[1]
 try { Add-LocalGroupMember -Group $adminsGroup -Member $member -ErrorAction Stop }
-catch [Microsoft.PowerShell.Commands.MemberExistsException] { }
+catch [Microsoft.PowerShell.Commands.MemberExistsException] { Write-Verbose 'Already a member of the Administrators group.' }
 
 Write-Step 'Creating the service'
-if (-not [System.Diagnostics.EventLog]::SourceExists($ServiceName)) { New-EventLog -LogName Application -Source $ServiceName }
+if (-not [System.Diagnostics.EventLog]::SourceExists($ServiceName)) { [System.Diagnostics.EventLog]::CreateEventSource($ServiceName, 'Application') }   # works in Windows PowerShell 5.1 and 7
 $binPath = "`"$exe`""
 $env:ICC_AGENT_CONFIG = $null
 if ($Gmsa) {

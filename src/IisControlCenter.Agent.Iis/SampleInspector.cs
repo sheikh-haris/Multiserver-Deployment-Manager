@@ -17,12 +17,19 @@ public sealed class SampleInspector : IIisInspector
             [new DiscoveredBinding("http", "*", 80, host, null), new DiscoveredBinding("https", "*", 443, host, "AABBCCDDEEFF00112233445566778899AABBCCDD")],
             [new DiscoveredApplication("/", path, pool, [new DiscoveredVirtualDirectory("/", path)]),
              new DiscoveredApplication("/api", path + @"\api", pool, [new DiscoveredVirtualDirectory("/", path + @"\api"), new DiscoveredVirtualDirectory("/uploads", @"D:\Data\uploads")])]);
-        return new DiscoveryResult(commandId, now, true,
-            [Site(1, "Default Web Site", @"C:\inetpub\wwwroot", "DefaultAppPool", "shop.example.local"),
-             Site(2, "legacy-portal", @"D:\Websites\legacy", "DefaultAppPool", "legacy.example.local"),
-             Site(3, "payments-web", @"D:\Websites\payments\web", "PaymentsPool", "pay.example.local")],
+        // ICC_SAMPLE_VARIANT=2 imitates someone changing IIS Manager by hand, so drift detection can be tried locally.
+        var changed = Environment.GetEnvironmentVariable("ICC_SAMPLE_VARIANT") == "2";
+        var sites = changed
+            ? new[] { Site(1, "Default Web Site", @"C:\inetpub\wwwroot", "DefaultAppPool", "shop.example.local"),
+                      Site(3, "payments-web-v2", @"D:\Websites\payments\web", "PaymentsPool", "pay.example.local"),
+                      Site(4, "brand-new", @"D:\Websites\brand-new", "NewPool", "new.example.local") }
+            : new[] { Site(1, "Default Web Site", @"C:\inetpub\wwwroot", "DefaultAppPool", "shop.example.local"),
+                      Site(2, "legacy-portal", @"D:\Websites\legacy", "DefaultAppPool", "legacy.example.local"),
+                      Site(3, "payments-web", @"D:\Websites\payments\web", "PaymentsPool", "pay.example.local") };
+        return new DiscoveryResult(commandId, now, true, sites,
             [new DiscoveredAppPool("DefaultAppPool", "ApplicationPoolIdentity", "v4.0", "Integrated", "Started"),
-             new DiscoveredAppPool("PaymentsPool", "LocalSystem", "", "Integrated", "Started")],
+             new DiscoveredAppPool("PaymentsPool", "LocalSystem", "", "Integrated", "Started"),
+             ..(changed ? new[] { new DiscoveredAppPool("NewPool", "ApplicationPoolIdentity", "v4.0", "Integrated", "Started") } : [])],
             [new DiscoveredCertificate("AABBCCDDEEFF00112233445566778899AABBCCDD", "CN=shop.example.local", now.AddDays(12), "My"),
              new DiscoveredCertificate("11223344556677889900AABBCCDDEEFF00112233", "CN=pay.example.local", now.AddDays(200), "WebHosting")],
             [new DiscoveredDotNetVersion(".NET Framework", "4.8"), new DiscoveredDotNetVersion("ASP.NET Core runtime", "10.0.0")]);

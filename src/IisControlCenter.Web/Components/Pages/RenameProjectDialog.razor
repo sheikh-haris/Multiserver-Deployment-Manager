@@ -1,0 +1,23 @@
+@inject ActorProvider Actors
+@inject ProjectService Projects
+<MudDialog>
+    <DialogContent>
+        <MudTextField T="string" @bind-Value="_name" Label="Project name" Class="mb-2" Immediate="true" />
+        <MudTextField T="string" @bind-Value="_desc" Label="Description" Lines="2" />
+        @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mt-3">@_error</MudAlert> }
+    </DialogContent>
+    <DialogActions><MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton><MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save</MudButton></DialogActions>
+</MudDialog>
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public Guid ProjectId { get; set; }
+    [Parameter] public string CurrentName { get; set; } = "";
+    [Parameter] public string? CurrentDescription { get; set; }
+    private string _name = "", _desc = ""; private string? _error;
+    protected override void OnInitialized() { _name = CurrentName; _desc = CurrentDescription ?? ""; }
+    private async Task Save()
+    {
+        try { var r = await Projects.UpdateAsync(await Actors.GetAsync(), ProjectId, _name, _desc); if (r.Ok) Dialog.Close(DialogResult.Ok(true)); else _error = r.Error; }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+    }
+}

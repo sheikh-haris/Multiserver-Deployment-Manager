@@ -81,3 +81,126 @@ jobs:
         with:
           name: agent-win-x64
           path: publish/agent/IisControlCenter.Agent.exe
+
+  windows-e2e:
+    name: Real install on Windows (installer, service, mutual TLS, discovery)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install the IIS role
+        shell: pwsh
+        run: Install-WindowsFeature -Name Web-Server, Web-Mgmt-Tools -ErrorAction Stop | Out-String | Write-Host
+
+      - name: Build the agent (single file) and the portal
+        shell: pwsh
+        run: |
+          dotnet publish src/IisControlCenter.Agent -c Release -r win-x64 -p:PublishSingleFile=true -o publish/agent
+          dotnet publish src/IisControlCenter.Web -c Release -o publish/web
+
+      - name: Certificate and host names for the portal
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -DnsName 'portal.test', 'agents.test' -CertStoreLocation Cert:\LocalMachine\My -KeyAlgorithm RSA -KeyLength 2048 -NotAfter (Get-Date).AddDays(7)
+          Export-Certificate -Cert $cert -FilePath server.cer | Out-Null
+          Import-Certificate -FilePath server.cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null     # so the agent's normal TLS check passes
+          Add-Content -Path "$env:SystemRoot\System32\drivers\etc\hosts" -Value '127.0.0.1 portal.test agents.test'
+          "THUMB=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Start the portal (Development mode, SQLite, two host names on one port)
+        shell: pwsh
+        run: |
+          $env:ASPNETCORE_ENVIRONMENT = 'Development'
+          $env:Portal__Tls__Thumbprint = $env:THUMB
+          $env:Portal__AgentsHost = 'agents.test'
+          $env:Portal__HttpsPort = '8443'
+          $env:ConnectionStrings__Default = "Data Source=$PWD\e2e.db"
+          $p = Start-Process dotnet -ArgumentList 'IisControlCenter.Web.dll' -WorkingDirectory "$PWD\publish\web" -RedirectStandardOutput "$PWD\portal.log" -RedirectStandardError "$PWD\portal.err" -PassThru
+          "PORTAL_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $ok = $false
+          foreach ($i in 1..60) {
+            try { if ((Invoke-RestMethod https://portal.test:8443/healthz) -eq 'ok') { $ok = $true; break } } catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $ok) { Get-Content portal.log, portal.err -ErrorAction SilentlyContinue | Write-Host; throw 'Portal did not start.' }
+          Write-Host 'Portal is up.'
+
+      - name: Add a server in the portal and take its one-time token
+        shell: pwsh
+        run: |
+          $srv = Invoke-RestMethod -Method Post 'https://portal.test:8443/dev/e2e/new-server?name=CI-WEB01'
+          "SERVER_ID=$($srv.serverId)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "REG_TOKEN=$($srv.token)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          New-Item -ItemType Directory -Path C:\Websites -Force | Out-Null
+
+      - name: Run the real installer in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\installer\Install-Agent.ps1 -PortalUrl https://agents.test:8443 -Token $env:REG_TOKEN -Environment Dev -AllowedRoots 'C:\Websites' -AgentExePath .\publish\agent\IisControlCenter.Agent.exe
+          $svc = Get-Service IisControlCenterAgent
+          if ($svc.Status -ne 'Running') { throw "Service is $($svc.Status)" }
+
+      - name: Agent shows as Pending, then approve it
+        shell: pwsh
+        run: |
+          function Get-Status { Invoke-RestMethod "https://portal.test:8443/dev/e2e/status?serverId=$env:SERVER_ID" }
+          $s = $null
+          foreach ($i in 1..60) { $s = Get-Status; if ($s.agentStatus -eq 'Pending') { break }; Start-Sleep -Seconds 1 }
+          if ($s.agentStatus -ne 'Pending') { throw "Expected Pending, got $($s.agentStatus)" }
+          if ($s.declared -ne 'Dev') { throw "Agent declared '$($s.declared)'" }
+          # approving with the wrong environment must be refused
+          $refused = $false
+          try { Invoke-RestMethod -Method Post "https://portal.test:8443/dev/e2e/approve?serverId=$env:SERVER_ID&environment=Prod" } catch { $refused = $true }
+          if (-not $refused) { throw 'Approval with a different environment was accepted.' }
+          Invoke-RestMethod -Method Post "https://portal.test:8443/dev/e2e/approve?serverId=$env:SERVER_ID&environment=Dev" | Out-Null
+          foreach ($i in 1..90) { $s = Get-Status; if ($s.agentStatus -eq 'Online' -and $s.sites -gt 0) { break }; Start-Sleep -Seconds 1 }
+          $s | ConvertTo-Json | Write-Host
+          if ($s.agentStatus -ne 'Online') { throw "Expected Online, got $($s.agentStatus)" }
+          if ($s.mode -ne 'ReadOnly') { throw "New servers must start ReadOnly, got $($s.mode)" }
+          if ($s.siteNames -notcontains 'Default Web Site') { throw 'Discovery did not report the Default Web Site.' }
+
+      - name: Service identity, folder permissions and local config
+        shell: pwsh
+        run: |
+          $svc = Get-CimInstance Win32_Service -Filter "Name='IisControlCenterAgent'"
+          Write-Host "Runs as: $($svc.StartName)"
+          if ($svc.StartName -notmatch 'svc-icc-dev') { throw 'Service does not run as the dedicated account.' }
+          if (-not (Get-LocalGroupMember -Group Administrators | Where-Object Name -like '*svc-icc-dev')) { throw 'Service account is not an administrator.' }
+          $acl = (icacls "$env:ProgramData\IisControlCenter") -join "`n"
+          Write-Host $acl
+          if ($acl -match 'Users|Everyone|Authenticated') { throw 'Config folder is readable by non-administrators.' }
+          $cfg = Get-Content "$env:ProgramData\IisControlCenter\agent.config.json" -Raw | ConvertFrom-Json
+          if ($cfg.Environment -ne 'Dev') { throw 'Wrong environment in the local config.' }
+          if ($cfg.AllowedRoots -notcontains 'c:\websites') { throw "Wrong roots: $($cfg.AllowedRoots)" }
+          if ($cfg.AllowManaged) { throw 'Managed mode must be off unless -AllowManaged was given.' }
+
+      - name: Service restarts and reconnects with its stored certificate
+        shell: pwsh
+        run: |
+          Restart-Service IisControlCenterAgent
+          $s = $null
+          foreach ($i in 1..60) { Start-Sleep -Seconds 1; $s = Invoke-RestMethod "https://portal.test:8443/dev/e2e/status?serverId=$env:SERVER_ID"; if ($s.agentStatus -eq 'Online') { break } }
+          if ($s.agentStatus -ne 'Online') { throw "After restart: $($s.agentStatus)" }
+
+      - name: Installer refuses a second install and uninstalls cleanly
+        shell: powershell
+        run: |
+          $failed = $false
+          try { .\installer\Install-Agent.ps1 -PortalUrl https://agents.test:8443 -Token 12345678 -Environment Dev -AllowedRoots 'C:\Websites' -AgentExePath .\publish\agent\IisControlCenter.Agent.exe -ValidateOnly } catch { $failed = $true }
+          if (-not $failed) { throw 'A second install was not refused.' }
+          .\installer\Install-Agent.ps1 -Uninstall
+          if (Get-Service IisControlCenterAgent -ErrorAction SilentlyContinue) { throw 'Service still exists after uninstall.' }
+
+      - name: Logs (always)
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host '--- portal.log'; Get-Content portal.log -Tail 80 -ErrorAction SilentlyContinue
+          Write-Host '--- portal.err'; Get-Content portal.err -Tail 40 -ErrorAction SilentlyContinue
+          Write-Host '--- agent event log'
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'IisControlCenterAgent' } -MaxEvents 40 -ErrorAction SilentlyContinue | Format-List TimeCreated, LevelDisplayName, Message | Out-String | Write-Host
+          if ($env:PORTAL_PID) { Stop-Process -Id $env:PORTAL_PID -Force -ErrorAction SilentlyContinue }

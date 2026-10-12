@@ -1,0 +1,30 @@
+@page "/my-access"
+@attribute [Authorize]
+@inject ActorProvider Actors
+@inject MembershipService Members
+<PageTitle>My access</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-1">My access</MudText>
+<MudText Typo="Typo.body2" Class="mb-3">Everything you can do in the portal and why. If something is missing, ask a Platform Admin or the Project Owner.</MudText>
+
+@if (_rows is null) { <MudProgressLinear Indeterminate="true" /> }
+else if (_rows.Count == 0) { <MudAlert Severity="Severity.Info">You have no roles yet.</MudAlert> }
+else
+{
+    <MudSimpleTable Dense="true" Hover="true">
+        <thead><tr><th>Level</th><th>Project</th><th>Role</th><th>Environment</th><th>Source</th><th>Expires</th></tr></thead>
+        <tbody>
+        @foreach (var r in _rows)
+        {
+            <tr>
+                <td>@r.Scope</td><td>@(r.ProjectName ?? "-")</td><td><b>@r.Role</b></td>
+                <td>@(RolePermissions.IsEnvironmentScoped(r.Role) || r.Scope == "Project" && r.Role != Role.ProjectOwner ? (r.EnvironmentName ?? "All") : "-")</td>
+                <td>@r.Source</td><td>@(r.ExpiresAt?.ToLocalTime().ToString("d") ?? "never")</td>
+            </tr>
+        }
+        </tbody>
+    </MudSimpleTable>
+}
+@code {
+    private IReadOnlyList<AccessRow>? _rows;
+    protected override async Task OnInitializedAsync() => _rows = await Members.MyAccessAsync(await Actors.GetAsync());
+}

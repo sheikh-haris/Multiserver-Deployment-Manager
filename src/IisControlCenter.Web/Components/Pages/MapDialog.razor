@@ -1,0 +1,114 @@
+@inject ActorProvider Actors
+@inject ProjectService Projects
+@inject TargetService Targets
+<MudDialog>
+    <DialogContent>
+        <MudPaper Outlined="true" Class="pa-3 mb-3">
+            <MudText Typo="Typo.subtitle2">@Item.ServerName <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@Item.Environment</MudChip></MudText>
+            <MudText><b>@Item.SiteName</b> @(Item.AppPath == "/" ? "" : Item.AppPath)</MudText>
+            <MudText Typo="Typo.caption" Class="mono">@Item.PhysicalPath &nbsp;|&nbsp; pool @Item.AppPoolName</MudText>
+            @if (Item.Suggestion.Confidence != Confidence.None)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">Suggestion (@Item.Suggestion.Confidence): @Item.Suggestion.ProjectName @(Item.Suggestion.ComponentName is null ? "" : "/ " + Item.Suggestion.ComponentName). @Item.Suggestion.Reason A person must confirm.</MudAlert>
+            }
+        </MudPaper>
+
+        @if (_options is null) { <MudProgressLinear Indeterminate="true" /> }
+        else if (_options.Count == 0) { <MudAlert Severity="Severity.Warning">There is no component to map to yet. Create the project and its component first.</MudAlert> }
+        else
+        {
+            <MudSelect T="Guid" Value="_projectId" ValueChanged="OnProject" Label="Project" Class="mb-2" ToStringFunc="@(g => _options?.FirstOrDefault(o => o.ProjectId == g)?.ProjectName ?? "")">
+                @foreach (var p in _options.GroupBy(o => o.ProjectId)) { <MudSelectItem Value="p.Key">@p.First().ProjectName</MudSelectItem> }
+            </MudSelect>
+            <MudSelect T="Guid" Value="_componentId" ValueChanged="OnComponent" Label="Component" Disabled="@(_projectId == Guid.Empty)" Class="mb-2" ToStringFunc="@(g => _options?.FirstOrDefault(o => o.ComponentId == g)?.ComponentName ?? "")">
+                @foreach (var c in _options.Where(o => o.ProjectId == _projectId)) { <MudSelectItem Value="c.ComponentId">@c.ComponentName</MudSelectItem> }
+            </MudSelect>
+            <MudTextField T="string" Value="@Item.Environment" Label="Environment (set by the server, cannot be changed here)" ReadOnly="true" Class="mb-2" />
+
+            @if (_preview is not null)
+            {
+                @if (_preview.Violations.Count == 0) { <MudAlert Severity="Severity.Success" Dense="true">All link rules pass.</MudAlert> }
+                @foreach (var v in _preview.Violations)
+                {
+                    <MudAlert Severity="@(v.Exceptionable ? Severity.Warning : Severity.Error)" Dense="true" Class="mb-1">@v.Message</MudAlert>
+                }
+                @if (_preview.NeedsException && _isAdmin)
+                {
+                    <MudTextField T="string" @bind-Value="_exception" Immediate="true" Label="Reason for allowing this (recorded in the audit log)" Lines="2" Class="mt-2" />
+                }
+            }
+            @if (!_isAdmin)
+            {
+                <MudTextField T="string" @bind-Value="_reason" Immediate="true" Label="Why should this be linked? (sent to a Platform Admin)" Lines="2" Class="mt-2" />
+            }
+        }
+        @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mt-3">@_error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit"
+                   Disabled="@(_busy || _componentId == Guid.Empty || (_preview?.HasBlocking ?? true) || (_preview?.NeedsException == true && _isAdmin && string.IsNullOrWhiteSpace(_exception)) || (_preview?.NeedsException == true && !_isAdmin))">
+            @(_isAdmin ? "Link" : "Send request")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter, EditorRequired] public Candidate Item { get; set; } = default!;
+    private IReadOnlyList<ProjectService.ComponentOption>? _options;
+    private Guid _projectId, _componentId;
+    private LinkPreview? _preview;
+    private string _exception = "", _reason = "";
+    private string? _error;
+    private bool _busy, _isAdmin;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var a = await Actors.GetAsync();
+        _isAdmin = a.Can(Permission.ManageTargets);
+        _options = await Projects.ListComponentOptionsAsync(a);
+        // Pre-fill from the suggestion. Nothing is saved until the person presses the button.
+        var s = Item.Suggestion;
+        var proj = _options.FirstOrDefault(o => s.ProjectName is not null && string.Equals(o.ProjectName, s.ProjectName, StringComparison.OrdinalIgnoreCase));
+        if (proj is not null)
+        {
+            _projectId = proj.ProjectId;
+            var comp = _options.FirstOrDefault(o => o.ProjectId == proj.ProjectId && s.ComponentName is not null && string.Equals(o.ComponentName, s.ComponentName, StringComparison.OrdinalIgnoreCase));
+            if (comp is not null) { _componentId = comp.ComponentId; await Preview(); }
+        }
+    }
+
+    private async Task OnProject(Guid id) { _projectId = id; _componentId = Guid.Empty; _preview = null; await Task.CompletedTask; }
+    private async Task OnComponent(Guid id) { _componentId = id; await Preview(); }
+
+    private async Task Preview()
+    {
+        _error = null; _preview = null;
+        var r = await Targets.PreviewAsync(await Actors.GetAsync(), _componentId, Item.ServerId, Item.IisSiteId, Item.AppPath);
+        if (r.Ok) _preview = r.Value; else _error = r.Error;
+    }
+
+    private async Task Submit()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            var a = await Actors.GetAsync();
+            OpResult r;
+            if (_isAdmin)
+            {
+                var link = await Targets.LinkAsync(a, _componentId, Item.ServerId, Item.IisSiteId, Item.AppPath, _preview?.NeedsException == true ? _exception : null);
+                r = link.Ok ? OpResult.Success() : OpResult.Fail(link.Error!);
+            }
+            else
+            {
+                var req = await Targets.RequestLinkAsync(a, _componentId, Item.ServerId, Item.IisSiteId, Item.AppPath, _reason);
+                r = req.Ok ? OpResult.Success() : OpResult.Fail(req.Error!);
+            }
+            if (r.Ok) Dialog.Close(DialogResult.Ok(_isAdmin ? "linked" : "requested")); else _error = r.Error;
+        }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        _busy = false;
+    }
+}

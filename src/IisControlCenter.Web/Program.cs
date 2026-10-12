@@ -107,6 +107,12 @@ builder.Services.AddScoped<ServerQueries>();
 builder.Services.AddScoped<RoleService>();
 builder.Services.AddScoped<AuditQueries>();
 builder.Services.AddScoped<DiscoveryJob>();
+builder.Services.AddScoped<ReconciliationJob>();
+builder.Services.AddScoped<Reconciler>();
+builder.Services.AddScoped<ProjectService>();
+builder.Services.AddScoped<MembershipService>();
+builder.Services.AddScoped<TargetService>();
+builder.Services.AddScoped<DriftQueries>();
 builder.Services.AddHostedService<AgentMonitor>();
 
 builder.Services.AddSignalR(o =>
@@ -212,6 +218,40 @@ if (authMode == "Dev")
     }).AllowAnonymous();
 }
 
+// ---------- automated end-to-end test hooks (Development + Dev sign-in only; never mapped otherwise) ----------
+if (authMode == "Dev" && isDev)
+{
+    static Actor E2EActor(TimeProvider clock)
+    {
+        var user = new UserContext("e2e", "E2E test", []);
+        var admin = new RoleAssignment { Id = Guid.NewGuid(), PrincipalType = PrincipalType.User, PrincipalId = "e2e", Scope = RoleScope.Platform, Role = Role.PlatformAdmin };
+        return new Actor("e2e", "E2E test", null, new AccessEvaluator(user, [admin], clock.GetUtcNow()));
+    }
+    app.MapPost("/dev/e2e/new-server", async (string name, ServerService svc, TimeProvider clock) =>
+    {
+        var r = await svc.CreateAsync(E2EActor(clock), name);
+        return r.Ok ? Results.Ok(new { serverId = r.Value!.ServerId, token = r.Value.Token }) : Results.BadRequest(r.Error);
+    }).AllowAnonymous();
+    app.MapPost("/dev/e2e/approve", async (Guid serverId, string environment, ServerService svc, TimeProvider clock) =>
+    {
+        var r = await svc.ApproveAsync(E2EActor(clock), serverId, environment);
+        return r.Ok ? Results.Ok() : Results.BadRequest(r.Error);
+    }).AllowAnonymous();
+    app.MapGet("/dev/e2e/status", async (Guid serverId, IDbContextFactory<AppDbContext> dbf) =>
+    {
+        await using var db = await dbf.CreateDbContextAsync();
+        var s = await db.Servers.AsNoTracking().FirstOrDefaultAsync(x => x.Id == serverId);
+        if (s is null) return Results.NotFound();
+        return Results.Ok(new
+        {
+            agentStatus = s.AgentStatus.ToString(), environment = s.EnvironmentName, declared = s.DeclaredEnvironment, mode = s.Mode.ToString(),
+            hostname = s.Hostname, iisInstalled = s.IisInstalled, lastDiscoveryAt = s.LastDiscoveryAt,
+            sites = await db.IisSites.CountAsync(x => x.ServerId == serverId), pools = await db.IisAppPools.CountAsync(x => x.ServerId == serverId),
+            siteNames = await db.IisSites.Where(x => x.ServerId == serverId).Select(x => x.Name).ToListAsync(),
+        });
+    }).AllowAnonymous();
+}
+
 // ---------- exports ----------
 app.MapGet("/export/audit.csv", async (string? search, string? action, string? result, HttpContext ctx,
     AccessService access, AuditQueries queries, TimeProvider clock) =>
@@ -233,6 +273,7 @@ if (hangfireOn)
     app.MapHangfireDashboard("/hangfire", new DashboardOptions { Authorization = [] })
         .RequireAuthorization(Policies.For(Permission.ManageSettings));
     RecurringJob.AddOrUpdate<DiscoveryJob>("discovery-all", j => j.RunAll(), "0 */6 * * *");
+    RecurringJob.AddOrUpdate<ReconciliationJob>("reconcile-daily", j => j.RunAll(), "30 2 * * *");   // 02:30 UTC
 }
 
 // Component endpoints (including /_blazor) must be reachable before sign-in; every routable page carries [Authorize] or [AllowAnonymous]

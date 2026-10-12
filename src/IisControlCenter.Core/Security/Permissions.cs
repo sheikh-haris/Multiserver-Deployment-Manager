@@ -13,6 +13,9 @@ public enum Permission
     ManageRoles,
     ManageSettings,
     ManageIis,          // Phase 4
+    ViewAllProjects,    // see every project (Platform Admin, Auditor)
+    ManageProjects,     // create and edit projects and components, project settings
+    ManageTargets,      // link IIS items to components, accept drift, decide link requests
 }
 
 public static class RolePermissions
@@ -27,7 +30,7 @@ public static class RolePermissions
         },
         [Role.Auditor] = new[]
         {
-            Permission.ViewServers, Permission.ViewDiscoveryReport, Permission.ViewAudit,
+            Permission.ViewServers, Permission.ViewDiscoveryReport, Permission.ViewAudit, Permission.ViewAllProjects,
         },
     };
 

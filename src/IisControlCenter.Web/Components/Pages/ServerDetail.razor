@@ -67,6 +67,10 @@ else if (_server is not null && _actor is not null)
                             <tr><td>Last seen</td><td>@(_server.LastSeenAt?.ToLocalTime().ToString("g") ?? "never")</td></tr>
                             <tr><td>Last discovery</td><td>@(_server.LastDiscoveryAt?.ToLocalTime().ToString("g") ?? "never")</td></tr>
                             <tr><td>Approved by</td><td>@(_server.ApprovedBy ?? "-")</td></tr>
+                            @foreach (var c in _certs.Where(c => c.Status == CertificateStatus.Active))
+                            {
+                                <tr><td>Agent certificate</td><td>expires @c.NotAfter.ToLocalTime().ToString("d") (@c.DaysLeft days) <span class="mono">@c.Thumbprint[..12]…</span> @if (c.DaysLeft < 90) { <MudChip T="string" Size="Size.Small" Color="Color.Warning">renews automatically when the agent connects</MudChip> }</td></tr>
+                            }
                         </tbody>
                     </MudSimpleTable>
                 </MudItem>
@@ -209,6 +213,7 @@ else
     [Parameter] public Guid Id { get; set; }
     private Server? _server;
     private ServerQueries.Inventory? _inv;
+    private IReadOnlyList<AgentCertRow> _certs = [];
     private Actor? _actor;
     private bool _loaded;
 
@@ -230,6 +235,7 @@ else
         _actor = await Actors.GetAsync();
         _server = await Queries.GetAsync(_actor, Id);
         _inv = _server is null ? null : await Queries.GetInventoryAsync(_actor, Id);
+        _certs = _server is null ? [] : await Queries.GetAgentCertificatesAsync(_actor, Id);
         _loaded = true;
     }
 

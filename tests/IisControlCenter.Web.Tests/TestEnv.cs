@@ -59,6 +59,11 @@ public sealed class TestEnv : IDisposable
     public ServerEventBus Bus { get; } = new();
     public AuditService Audit { get; }
     public AgentCommandService Commands { get; }
+    public Reconciler Reconciler { get; }
+    public ProjectService Projects { get; }
+    public MembershipService Members { get; }
+    public TargetService Targets { get; }
+    public DriftQueries Drift { get; }
     public ServerService Servers { get; }
     public ServerQueries Queries { get; }
     public RoleService Roles { get; }
@@ -72,7 +77,12 @@ public sealed class TestEnv : IDisposable
         using (var db = Db.CreateDbContext()) db.Database.EnsureCreated();
         Audit = new AuditService(Db, Clock);
         Commands = new AgentCommandService(Db, Hub, Tracker, new MemoryCache(new MemoryCacheOptions()), Audit, Clock);
-        Servers = new ServerService(Db, Audit, Tracker, Commands, Bus, Clock);
+        Reconciler = new Reconciler(Db, Audit, Bus, Clock);
+        Servers = new ServerService(Db, Audit, Tracker, Commands, Bus, Reconciler, Clock);
+        Projects = new ProjectService(Db, Audit, Clock);
+        Members = new MembershipService(Db, Audit, Clock);
+        Targets = new TargetService(Db, Audit, Reconciler, Bus, Clock);
+        Drift = new DriftQueries(Db, Audit, Clock);
         Queries = new ServerQueries(Db, Clock);
         Roles = new RoleService(Db, Audit, Clock);
         AuditQueries = new AuditQueries(Db, Audit);
@@ -122,6 +132,46 @@ public sealed class TestEnv : IDisposable
         var r = await Servers.ApproveAsync(Admin, id, env);
         Assert.True(r.Ok, r.Error);
         return id;
+    }
+
+    // ---------- Phase 2 helpers ----------
+
+    public sealed record SiteSpec(long Id, string Name, string Path, string Pool, params (string AppPath, string Path, string Pool)[] SubApps);
+
+    public static DiscoveryResult Discovery(params SiteSpec[] sites) => new(Guid.NewGuid(), DateTimeOffset.UtcNow, true,
+        sites.Select(s => new DiscoveredSite(s.Id, s.Name, "Started", s.Path, s.Pool,
+            [new DiscoveredBinding("http", "*", 80, s.Name.ToLowerInvariant() + ".local", null)],
+            new[] { new DiscoveredApplication("/", s.Path, s.Pool, [new DiscoveredVirtualDirectory("/", s.Path)]) }
+                .Concat(s.SubApps.Select(a => new DiscoveredApplication(a.AppPath, a.Path, a.Pool, [new DiscoveredVirtualDirectory("/", a.Path)]))).ToList())).ToList(),
+        sites.SelectMany(s => s.SubApps.Select(a => a.Pool).Append(s.Pool)).Distinct().Select(p => new DiscoveredAppPool(p, "ApplicationPoolIdentity", "v4.0", "Integrated", "Started")).ToList(),
+        [], []);
+
+    public async Task Store(Guid serverId, params SiteSpec[] sites)
+    {
+        var r = await Servers.StoreDiscoveryAsync(serverId, Discovery(sites));
+        Assert.True(r.Ok, r.Error);
+        Clock.Advance(TimeSpan.FromMinutes(1));
+    }
+
+    public async Task<Guid> NewProject(string name = "Payments", string? ownerGroup = null)
+    {
+        var r = await Projects.CreateAsync(Admin, name, null, ownerGroup, ownerGroup is null ? null : "Owners of " + name);
+        Assert.True(r.Ok, r.Error);
+        return r.Value;
+    }
+
+    public async Task<Guid> NewComponent(Guid projectId, string name = "Web Frontend")
+    {
+        var r = await Projects.AddComponentAsync(Admin, projectId, name, "Web", "/health", null, false);
+        Assert.True(r.Ok, r.Error);
+        return r.Value;
+    }
+
+    public async Task<Guid> Link(Guid componentId, Guid serverId, long siteId, string appPath = "/", string? exception = null)
+    {
+        var r = await Targets.LinkAsync(Admin, componentId, serverId, siteId, appPath, exception);
+        Assert.True(r.Ok, r.Error);
+        return r.Value;
     }
 
     public void Dispose() => Conn.Dispose();

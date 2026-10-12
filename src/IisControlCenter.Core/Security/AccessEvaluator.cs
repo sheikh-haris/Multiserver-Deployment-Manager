@@ -62,4 +62,53 @@ public sealed class AccessEvaluator
     }
 
     public bool IsAnyRole => _assignments.Count > 0;
+
+    /// <summary>
+    /// Project permission check. Needs a project role for that project and environment.
+    /// Platform Admin may also View and manage members and requests links on any project (to run the platform),
+    /// but never gets Submit or Approve from the platform role: deploying needs the project role.
+    /// </summary>
+    public bool CanOnProject(ProjectPermission permission, Guid projectId, string? environment = null)
+    {
+        if (permission is ProjectPermission.View or ProjectPermission.ManageMembers or ProjectPermission.RequestLink
+            && Can(Permission.ManageProjects)) return true;
+        if (permission == ProjectPermission.View && Can(Permission.ViewAllProjects)) return true;
+
+        foreach (var a in _assignments)
+        {
+            if (a.Scope != RoleScope.Project || a.ProjectId != projectId) continue;
+            if (!ProjectRolePermissions.Grants(a.Role, permission)) continue;
+            if (ProjectRolePermissions.IsEnvironmentScoped(a.Role) && environment is not null)
+            {
+                if (!string.Equals(a.EnvironmentName, environment, StringComparison.OrdinalIgnoreCase)) continue;
+            }
+            else if (ProjectRolePermissions.IsEnvironmentScoped(a.Role) && permission != ProjectPermission.View)
+            {
+                // An environment-scoped action needs an environment.
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Environments in which the user holds a role that grants this permission on the project.</summary>
+    public IReadOnlySet<string> EnvironmentsFor(ProjectPermission permission, Guid projectId)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var a in _assignments)
+            if (a.Scope == RoleScope.Project && a.ProjectId == projectId && a.EnvironmentName is not null
+                && ProjectRolePermissions.Grants(a.Role, permission))
+                set.Add(a.EnvironmentName);
+        return set;
+    }
+
+    /// <summary>Projects where the user has any project role. Platform-wide viewers are handled by the caller.</summary>
+    public IReadOnlySet<Guid> ProjectIdsWithAnyRole() =>
+        _assignments.Where(a => a.Scope == RoleScope.Project && a.ProjectId is not null).Select(a => a.ProjectId!.Value).ToHashSet();
+
+    public bool IsProjectOwner(Guid projectId) =>
+        _assignments.Any(a => a.Scope == RoleScope.Project && a.ProjectId == projectId && a.Role == Role.ProjectOwner);
+
+    public IReadOnlyList<RoleAssignment> ActiveAssignments => _assignments;
 }

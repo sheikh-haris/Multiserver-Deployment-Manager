@@ -22,6 +22,14 @@ public class AppDbContext : DbContext
     public DbSet<RoleAssignment> RoleAssignments => Set<RoleAssignment>();
     public DbSet<AuditEntry> AuditLog => Set<AuditEntry>();
     public DbSet<Setting> Settings => Set<Setting>();
+    public DbSet<Project> Projects => Set<Project>();
+    public DbSet<Component> Components => Set<Component>();
+    public DbSet<DeploymentTarget> DeploymentTargets => Set<DeploymentTarget>();
+    public DbSet<ProtectedPath> ProtectedPaths => Set<ProtectedPath>();
+    public DbSet<ProjectEnvironmentSetting> ProjectEnvironmentSettings => Set<ProjectEnvironmentSetting>();
+    public DbSet<LinkException> LinkExceptions => Set<LinkException>();
+    public DbSet<LinkRequest> LinkRequests => Set<LinkRequest>();
+    public DbSet<DriftEvent> DriftEvents => Set<DriftEvent>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -162,6 +170,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.RevokedBy).HasMaxLength(200);
             e.HasIndex(x => x.PrincipalId);
             e.HasOne<EnvironmentDef>().WithMany().HasForeignKey(x => x.EnvironmentName).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Restrict);
         });
 
         b.Entity<AuditEntry>(e =>
@@ -183,6 +192,105 @@ public class AppDbContext : DbContext
             e.HasIndex(x => x.Timestamp);
             e.HasIndex(x => x.Action);
             e.HasIndex(x => x.ServerId);
+        });
+
+        b.Entity<Project>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Slug).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Description).HasMaxLength(2000);
+            e.Property(x => x.OwnerGroupId).HasMaxLength(100);
+            e.Property(x => x.OwnerGroupName).HasMaxLength(300);
+            e.Property(x => x.CreatedBy).HasMaxLength(200);
+            e.HasIndex(x => x.Name).IsUnique();
+            e.HasIndex(x => x.Slug).IsUnique();
+            e.HasMany(x => x.Components).WithOne().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<Component>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Slug).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Type).HasMaxLength(30);
+            e.Property(x => x.HealthCheckPath).HasMaxLength(500);
+            e.Property(x => x.AllowedFileTypes).HasMaxLength(200);
+            e.HasIndex(x => new { x.ProjectId, x.Name }).IsUnique();
+            e.HasMany(x => x.Targets).WithOne().HasForeignKey(x => x.ComponentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasMany(x => x.ProtectedPaths).WithOne().HasForeignKey(x => x.ComponentId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<DeploymentTarget>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.EnvironmentName).HasMaxLength(50).IsRequired();
+            e.Property(x => x.IisSiteName).HasMaxLength(300);
+            e.Property(x => x.AppPath).HasMaxLength(500);
+            e.Property(x => x.PhysicalPath).HasMaxLength(1000);
+            e.Property(x => x.AppPoolName).HasMaxLength(300);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.StatusDetail).HasMaxLength(1000);
+            e.Property(x => x.CreatedBy).HasMaxLength(200);
+            // An IIS site/application can belong to only one target.
+            e.HasIndex(x => new { x.ServerId, x.IisSiteId, x.AppPath }).IsUnique();
+            // One target per component, environment and server.
+            e.HasIndex(x => new { x.ComponentId, x.EnvironmentName, x.ServerId }).IsUnique();
+            e.HasOne<Server>().WithMany().HasForeignKey(x => x.ServerId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<EnvironmentDef>().WithMany().HasForeignKey(x => x.EnvironmentName).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<LinkException>().WithMany().HasForeignKey(x => x.LinkExceptionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<ProtectedPath>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Path).HasMaxLength(500).IsRequired();
+            e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(20);
+        });
+
+        b.Entity<ProjectEnvironmentSetting>(e =>
+        {
+            e.HasKey(x => new { x.ProjectId, x.EnvironmentName });
+            e.Property(x => x.EnvironmentName).HasMaxLength(50);
+            e.Property(x => x.UpdatedBy).HasMaxLength(200);
+            e.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<EnvironmentDef>().WithMany().HasForeignKey(x => x.EnvironmentName).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<LinkException>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Reason).HasMaxLength(1000);
+            e.Property(x => x.Violation).HasMaxLength(1000);
+            e.Property(x => x.GrantedBy).HasMaxLength(200);
+        });
+
+        b.Entity<LinkRequest>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.EnvironmentName).HasMaxLength(50);
+            e.Property(x => x.AppPath).HasMaxLength(500);
+            e.Property(x => x.Reason).HasMaxLength(1000);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.RequestedBy).HasMaxLength(300);
+            e.Property(x => x.RequestedById).HasMaxLength(100);
+            e.Property(x => x.DecidedBy).HasMaxLength(300);
+            e.Property(x => x.DecisionComment).HasMaxLength(1000);
+            e.HasOne<Component>().WithMany().HasForeignKey(x => x.ComponentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Server>().WithMany().HasForeignKey(x => x.ServerId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<DriftEvent>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.ObjectType).HasMaxLength(30);
+            e.Property(x => x.ObjectRef).HasMaxLength(500);
+            e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.Before).HasMaxLength(2000);
+            e.Property(x => x.After).HasMaxLength(2000);
+            e.Property(x => x.AcknowledgedBy).HasMaxLength(300);
+            e.HasIndex(x => new { x.ServerId, x.DetectedAt });
+            e.HasOne<Server>().WithMany().HasForeignKey(x => x.ServerId).OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<Setting>(e =>

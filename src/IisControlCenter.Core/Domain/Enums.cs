@@ -22,3 +22,11 @@ public enum Role
 }
 
 public enum MappingStatus { Unassigned, Mapped, Missing }
+
+public enum TargetStatus { Active, Drifted, Missing, Disabled }
+
+public enum ProtectedPathKind { ConfigFile, DataFolder }
+
+public enum LinkRequestStatus { Pending, Approved, Rejected, Cancelled }
+
+public enum DriftKind { Created, Deleted, Changed }

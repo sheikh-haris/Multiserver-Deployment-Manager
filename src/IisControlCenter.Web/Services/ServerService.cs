@@ -18,9 +18,11 @@ public sealed class ServerService(
     AgentConnectionTracker tracker,
     AgentCommandService commands,
     ServerEventBus bus,
+    Reconciler reconciler,
     TimeProvider clock)
 {
     public const int DefaultTokenMinutes = 60;
+    public const int CertRenewalDays = 90;
 
     // ---------------- Admin actions ----------------
 
@@ -147,6 +149,8 @@ public sealed class ServerService(
         await using var db = await dbf.CreateDbContextAsync();
         var s = await db.Servers.FirstOrDefaultAsync(x => x.Id == serverId);
         if (s is null) return OpResult.Fail("Server not found.");
+        if (await db.DeploymentTargets.AnyAsync(t => t.ServerId == serverId))
+            return OpResult.Fail("This server still has deployment targets. Remove them from their components first.");
         await RevokeCoreAsync(db, s, actor.UserName, "Server removed");
         s.IsDeleted = true;
         await db.SaveChangesAsync();
@@ -328,11 +332,14 @@ public sealed class ServerService(
         if (s is null || s.EnvironmentName is null) return OpResult.Fail("Server is not approved.");
 
         var now = clock.GetUtcNow();
-        var oldSites = await db.IisSites.Where(x => x.ServerId == serverId).ToListAsync();
+        var hadPrevious = s.LastDiscoveryAt is not null;
+        var oldSites = await db.IisSites.Where(x => x.ServerId == serverId).Include(x => x.Bindings).Include(x => x.Applications).AsSplitQuery().ToListAsync();
+        var oldPools = await db.IisAppPools.Where(x => x.ServerId == serverId).ToListAsync();
+        var oldCerts = await db.IisCertificates.Where(x => x.ServerId == serverId).ToListAsync();
         var keepMapping = oldSites.ToDictionary(x => x.IisSiteId, x => x.MappingStatus);
         db.IisSites.RemoveRange(oldSites);
-        db.IisAppPools.RemoveRange(await db.IisAppPools.Where(x => x.ServerId == serverId).ToListAsync());
-        db.IisCertificates.RemoveRange(await db.IisCertificates.Where(x => x.ServerId == serverId).ToListAsync());
+        db.IisAppPools.RemoveRange(oldPools);
+        db.IisCertificates.RemoveRange(oldCerts);
         db.ServerDotNetVersions.RemoveRange(await db.ServerDotNetVersions.Where(x => x.ServerId == serverId).ToListAsync());
         await db.SaveChangesAsync();
 
@@ -382,8 +389,58 @@ public sealed class ServerService(
 
         await audit.WriteSystemAsync(new AuditRecord("Discovery.Received", "Server", serverId.ToString(), serverId, s.EnvironmentName,
             After: $"sites={r.Sites.Count}; pools={r.AppPools.Count}; certs={r.Certificates.Count}"));
+        // Compare with the previous snapshot and with the stored links. Failures here must not lose the discovery itself.
+        try { await reconciler.AfterDiscoveryAsync(serverId, hadPrevious, oldSites, oldPools, oldCerts); }
+        catch (Exception ex) { await audit.WriteSystemAsync(new AuditRecord("Target.Reconcile", "Server", serverId.ToString(), serverId, Result: "Failed", Detail: ex.GetType().Name + ": " + ex.Message)); }
         bus.Publish(new ServerChanged(serverId, ServerChangeKind.Discovery));
         return OpResult.Success();
+    }
+
+    // ---------------- agent certificate renewal ----------------
+
+    /// <summary>
+    /// An approved agent asks for a new certificate before the old one expires. The new certificate is pinned as Active.
+    /// The old one stays Active until the agent has connected with the new one (see SupersedeOlderCertificatesAsync),
+    /// so a crash half-way never locks the agent out.
+    /// </summary>
+    public async Task<OpResult<string>> RenewCertificateAsync(Guid serverId, string currentThumbprint, string newCertBase64)
+    {
+        await using var db = await dbf.CreateDbContextAsync();
+        var s = await db.Servers.FirstOrDefaultAsync(x => x.Id == serverId);
+        if (s is null || s.EnvironmentName is null || s.AgentStatus == AgentStatus.Revoked) return OpResult<string>.Fail("Renewal is only possible for approved servers.");
+        X509Certificate2 cert;
+        try { cert = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(newCertBase64)); }
+        catch { return OpResult<string>.Fail("The certificate could not be read."); }
+        using (cert)
+        {
+            var now = clock.GetUtcNow();
+            var problem = ValidateCertificate(cert, now);
+            if (problem is not null) return OpResult<string>.Fail(problem);
+            var thumb = Thumbprint(cert);
+            if (await db.AgentCertificates.AnyAsync(c => c.Thumbprint == thumb)) return OpResult<string>.Fail("This certificate is already registered.");
+            // Keep the number of live certificates small: a flood of renewals must not pile up valid certificates.
+            if (await db.AgentCertificates.CountAsync(c => c.ServerId == serverId && c.Status == CertificateStatus.Active) >= 2)
+                return OpResult<string>.Fail("A renewal is already waiting to be used.");
+            db.AgentCertificates.Add(new AgentCertificate { Id = Guid.NewGuid(), ServerId = serverId, Thumbprint = thumb, NotAfter = cert.NotAfter.ToUniversalTime(), Status = CertificateStatus.Active, CreatedAt = now });
+            await db.SaveChangesAsync();
+            await audit.WriteSystemAsync(new AuditRecord("Agent.CertRenewed", "Server", serverId.ToString(), serverId, s.EnvironmentName,
+                Before: currentThumbprint[..Math.Min(16, currentThumbprint.Length)] + "…", After: thumb[..16] + "…"));
+            return OpResult<string>.Success(thumb);
+        }
+    }
+
+    /// <summary>When an agent connects with its newest certificate, older active ones are retired.</summary>
+    public async Task SupersedeOlderCertificatesAsync(Guid serverId, string connectedThumbprint)
+    {
+        await using var db = await dbf.CreateDbContextAsync();
+        var certs = await db.AgentCertificates.Where(c => c.ServerId == serverId && c.Status == CertificateStatus.Active).ToListAsync();
+        var current = certs.FirstOrDefault(c => c.Thumbprint == connectedThumbprint);
+        if (current is null) return;
+        var older = certs.Where(c => c.Id != current.Id && c.CreatedAt < current.CreatedAt).ToList();
+        if (older.Count == 0) return;
+        foreach (var c in older) c.Status = CertificateStatus.Superseded;
+        await db.SaveChangesAsync();
+        await audit.WriteSystemAsync(new AuditRecord("Agent.CertSuperseded", "Server", serverId.ToString(), serverId, After: $"{older.Count} older certificate(s) retired"));
     }
 
     // ---------------- helpers ----------------

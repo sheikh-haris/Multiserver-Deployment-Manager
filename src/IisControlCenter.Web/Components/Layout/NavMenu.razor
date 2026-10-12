@@ -1,11 +1,15 @@
 <MudNavMenu>
     <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
+    <MudNavLink Href="/projects" Icon="@Icons.Material.Filled.Folder">Projects</MudNavLink>
+    <MudNavLink Href="/onboarding" Icon="@Icons.Material.Filled.Link">Onboarding</MudNavLink>
     <AuthorizeView Policy="@Policies.For(Permission.ViewServers)">
         <MudNavLink Href="/servers" Icon="@Icons.Material.Filled.Dns">Servers</MudNavLink>
+        <MudNavLink Href="/drift" Icon="@Icons.Material.Filled.CompareArrows">Drift</MudNavLink>
     </AuthorizeView>
     <AuthorizeView Policy="@Policies.For(Permission.ViewDiscoveryReport)">
         <MudNavLink Href="/reports/discovery" Icon="@Icons.Material.Filled.FactCheck">Discovery report</MudNavLink>
     </AuthorizeView>
+    <MudNavLink Href="/my-access" Icon="@Icons.Material.Filled.Badge">My access</MudNavLink>
     <AuthorizeView Policy="@Policies.For(Permission.ViewAudit)">
         <MudNavLink Href="/audit" Icon="@Icons.Material.Filled.History">Audit log</MudNavLink>
     </AuthorizeView>

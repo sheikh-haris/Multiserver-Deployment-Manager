@@ -41,3 +41,25 @@ public sealed class DiscoveryJob(IDbContextFactory<AppDbContext> dbf, AgentComma
         }
     }
 }
+
+/// <summary>
+/// Hangfire job, daily. Asks every online server for a fresh discovery, then checks every link against the latest
+/// snapshot (so a server that stays offline is still re-checked, and drift is never "forgotten").
+/// </summary>
+public sealed class ReconciliationJob(IDbContextFactory<AppDbContext> dbf, AgentCommandService commands, Reconciler reconciler, ILogger<ReconciliationJob> log)
+{
+    public async Task RunAll()
+    {
+        await using var db = await dbf.CreateDbContextAsync();
+        var servers = await db.Servers.AsNoTracking().Where(s => s.EnvironmentName != null).ToListAsync();
+        foreach (var s in servers)
+        {
+            try
+            {
+                if (s.AgentStatus == AgentStatus.Online) await commands.SendDiscoveryAsync(s);
+                await reconciler.VerifyServerAsync(s.Id);
+            }
+            catch (Exception ex) { log.LogError(ex, "Reconciliation failed for {Server}", s.Name); }
+        }
+    }
+}

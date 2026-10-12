@@ -20,6 +20,7 @@ public sealed class AgentHub(
     public override async Task OnConnectedAsync()
     {
         tracker.Add(ServerId, Context.ConnectionId);
+        await servers.SupersedeOlderCertificatesAsync(ServerId, Thumbprint);
         await base.OnConnectedAsync();
     }
 
@@ -62,6 +63,15 @@ public sealed class AgentHub(
         }
         var r = await servers.StoreDiscoveryAsync(ServerId, result);
         return r.Ok;
+    }
+
+    /// <summary>Returns the new certificate's thumbprint, or null when the portal refuses.</summary>
+    public async Task<string?> RenewCertificate(string newCertificateBase64)
+    {
+        await EnsureCertificateActiveAsync();
+        var r = await servers.RenewCertificateAsync(ServerId, Thumbprint, newCertificateBase64);
+        if (!r.Ok) log.LogWarning("Certificate renewal for {Server} refused: {Error}", ServerId, r.Error);
+        return r.Ok ? r.Value : null;
     }
 
     public Task ReportRejected(CommandRejected rejected) =>

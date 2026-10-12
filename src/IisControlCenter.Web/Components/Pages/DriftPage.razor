@@ -1,0 +1,67 @@
+@page "/drift"
+@attribute [Authorize(Policy = "perm:ViewServers")]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject DriftQueries Queries
+@inject ServerEventBus Bus
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+<PageTitle>Drift</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-1">Drift</MudText>
+<MudText Typo="Typo.body2" Class="mb-3">Changes made in IIS outside the portal. Linked sites that were deleted or renamed become <b>Missing</b>; changed folders or pools become <b>Drifted</b>. Deployments stay blocked for those targets until an admin accepts or reverts the change.</MudText>
+
+<MudDataGrid @ref="_grid" T="DriftRow" ServerData="Load" Dense="true" Hover="true" Filterable="false" SortMode="SortMode.None">
+    <ToolBarContent>
+        <MudTextField T="string" Value="_search" ValueChanged="OnSearch" Placeholder="Search" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true" DebounceInterval="300" Class="mr-3" />
+        <MudSwitch T="bool" Value="_open" ValueChanged="OnOpen" Label="Only open" Color="Color.Primary" />
+    </ToolBarContent>
+    <Columns>
+        <TemplateColumn Title="Detected"><CellTemplate>@context.Item.DetectedAt.ToLocalTime().ToString("g")</CellTemplate></TemplateColumn>
+        <TemplateColumn Title="Server"><CellTemplate><MudLink Href="@($"/servers/{context.Item.ServerId}")">@context.Item.ServerName</MudLink> <span>@context.Item.Environment</span></CellTemplate></TemplateColumn>
+        <PropertyColumn Property="x => x.ObjectType" Title="Type" />
+        <PropertyColumn Property="x => x.ObjectRef" Title="Object" />
+        <TemplateColumn Title="Change"><CellTemplate><MudChip T="string" Size="Size.Small" Color="@(context.Item.Kind == DriftKind.Deleted ? Color.Error : context.Item.Kind == DriftKind.Created ? Color.Info : Color.Warning)">@context.Item.Kind</MudChip></CellTemplate></TemplateColumn>
+        <TemplateColumn Title="Details">
+            <CellTemplate>
+                @if (!string.IsNullOrEmpty(context.Item.Before)) { <MudText Typo="Typo.caption" Class="d-block">Before: @context.Item.Before</MudText> }
+                @if (!string.IsNullOrEmpty(context.Item.After)) { <MudText Typo="Typo.caption" Class="d-block">Now: @context.Item.After</MudText> }
+            </CellTemplate>
+        </TemplateColumn>
+        <TemplateColumn Title="">
+            <CellTemplate>
+                @if (context.Item.AcknowledgedAt is null) { <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="() => Ack(context.Item)">Acknowledge</MudButton> }
+                else { <MudText Typo="Typo.caption">@context.Item.AcknowledgedBy, @context.Item.AcknowledgedAt.Value.ToLocalTime().ToString("g")</MudText> }
+            </CellTemplate>
+        </TemplateColumn>
+    </Columns>
+    <PagerContent><MudDataGridPager T="DriftRow" PageSizeOptions="@(new[] { 25, 50, 100 })" /></PagerContent>
+    <NoRecordsContent><MudText Class="pa-4" Color="Color.Success">No drift found.</MudText></NoRecordsContent>
+</MudDataGrid>
+
+@code {
+    private MudDataGrid<DriftRow> _grid = default!;
+    private string? _search;
+    private bool _open = true;
+
+    protected override void OnInitialized() => Bus.Changed += OnChanged;
+
+    private async Task<GridData<DriftRow>> Load(GridState<DriftRow> s, CancellationToken ct)
+    {
+        var (rows, total) = await Queries.ListAsync(await Actors.GetAsync(), null, _open, _search, s.Page, s.PageSize);
+        return new GridData<DriftRow> { Items = rows, TotalItems = total };
+    }
+
+    private Task OnSearch(string v) { _search = v; return _grid.ReloadServerData(); }
+    private Task OnOpen(bool v) { _open = v; return _grid.ReloadServerData(); }
+
+    private async Task Ack(DriftRow r)
+    {
+        try { var res = await Queries.AcknowledgeAsync(await Actors.GetAsync(), r.Id); Snackbar.Add(res.Ok ? "Acknowledged." : res.Error ?? "Failed", res.Ok ? Severity.Success : Severity.Error); }
+        catch (ForbiddenException ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        await _grid.ReloadServerData();
+    }
+
+    private void OnChanged(ServerChanged e) { if (e.Kind == ServerChangeKind.Discovery) _ = InvokeAsync(async () => { if (_grid is not null) await _grid.ReloadServerData(); }); }
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

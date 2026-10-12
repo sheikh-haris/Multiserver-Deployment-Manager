@@ -1,0 +1,64 @@
+@page "/projects"
+@attribute [Authorize]
+@inject ActorProvider Actors
+@inject ProjectService Projects
+@inject IDialogService Dialogs
+@inject NavigationManager Nav
+<PageTitle>Projects</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudText Typo="Typo.h4">Projects</MudText>
+    <MudSpacer />
+    @if (_canCreate)
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="Create">New project</MudButton>
+    }
+</MudStack>
+
+@if (_rows is null) { <MudProgressLinear Indeterminate="true" /> }
+else
+{
+    <MudDataGrid T="ProjectRow" Items="_rows" Dense="true" Hover="true" Filterable="false" QuickFilter="Filter" Style="cursor:pointer"
+                 RowClick="@((DataGridRowClickEventArgs<ProjectRow> e) => Nav.NavigateTo($"/projects/{e.Item.Id}"))">
+        <ToolBarContent>
+            <MudTextField T="string" @bind-Value="_search" Placeholder="Search projects" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Immediate="true" />
+        </ToolBarContent>
+        <Columns>
+            <PropertyColumn Property="x => x.Name" Title="Project" />
+            <PropertyColumn Property="x => x.Description" Title="Description" />
+            <PropertyColumn Property="x => x.OwnerGroupName" Title="Owner group" />
+            <PropertyColumn Property="x => x.ComponentCount" Title="Components" />
+            <PropertyColumn Property="x => x.TargetCount" Title="Targets" />
+            <TemplateColumn Title="Environments" Sortable="false">
+                <CellTemplate>@foreach (var e in context.Item.Environments) { <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@e</MudChip> }</CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="State"><CellTemplate><StatusChip Status="@(context.Item.IsActive ? "Active" : "Inactive")" /></CellTemplate></TemplateColumn>
+        </Columns>
+        <PagerContent><MudDataGridPager T="ProjectRow" /></PagerContent>
+        <NoRecordsContent><MudText Class="pa-4">You do not have access to any project yet. A Platform Admin or a Project Owner can add you.</MudText></NoRecordsContent>
+    </MudDataGrid>
+}
+
+@code {
+    private IReadOnlyList<ProjectRow>? _rows;
+    private string? _search;
+    private bool _canCreate;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        var a = await Actors.GetAsync();
+        _canCreate = a.Can(Permission.ManageProjects);
+        _rows = await Projects.ListAsync(a);
+    }
+
+    private bool Filter(ProjectRow r) => string.IsNullOrWhiteSpace(_search) || r.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || (r.Description ?? "").Contains(_search, StringComparison.OrdinalIgnoreCase);
+
+    private async Task Create()
+    {
+        var dlg = await Dialogs.ShowAsync<NewProjectDialog>("New project", new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var res = await dlg.Result;
+        if (res is { Canceled: false, Data: Guid id }) Nav.NavigateTo($"/projects/{id}");
+    }
+}
