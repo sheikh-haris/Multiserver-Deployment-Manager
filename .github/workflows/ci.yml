@@ -162,7 +162,7 @@ jobs:
             New-WebAppPool -Name $x[0]
             New-Website -Name $x[0] -PhysicalPath $dir -Port $x[1] -ApplicationPool $x[0] | Out-Null
           }
-          Get-Website | Format-Table Name, Id, PhysicalPath | Out-String | Write-Host
+          & "$env:windir\system32\inetsrv\appcmd.exe" list site | Write-Host
 
       - name: Agent shows as Pending, then approve it
         shell: pwsh

@@ -59,7 +59,7 @@ function Wait-Request($id, $seconds = 180) {
 
 function New-Project($name, $health, $siteName) {
     $p = Invoke-RestMethod -Method Post "$portal/dev/e2e/project?name=$name&health=$health"
-    $site = (Get-Website -Name $siteName).Id
+    $site = [int](& "$env:windir\system32\inetsrv\appcmd.exe" list site $siteName /text:id)
     $t = Invoke-RestMethod -Method Post "$portal/dev/e2e/link?componentId=$($p.componentId)&serverId=$env:SERVER_ID&siteId=$site"
     foreach ($g in @(@('deployer', 'Deployer'), @('approver', 'Approver'))) {
         Invoke-RestMethod -Method Post "$portal/dev/e2e/grant?persona=$($g[0])&projectId=$($p.projectId)&role=$($g[1])&env=Dev" | Out-Null

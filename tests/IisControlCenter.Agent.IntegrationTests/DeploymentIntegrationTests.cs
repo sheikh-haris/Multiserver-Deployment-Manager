@@ -40,6 +40,11 @@ public sealed class DeployIisFixture : IDisposable
         if (!new IisInspector().IsIisInstalled()) { SkipReason = "IIS is not installed."; return; }
 
         Directory.CreateDirectory(Web);
+        // A folder under the user's temp directory is not readable by IIS (anonymous requests run as IUSR). Without this every request is a 403.
+        // Files the agent writes later inherit this permission.
+        var icacls = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("icacls.exe", $"\"{Root}\" /grant \"IIS_IUSRS:(OI)(CI)RX\" \"IUSR:(OI)(CI)RX\" /Q") { UseShellExecute = false, CreateNoWindow = true })!;
+        icacls.WaitForExit();
+        if (icacls.ExitCode != 0) throw new InvalidOperationException("icacls failed with " + icacls.ExitCode);
         Dirs = new AgentDirs(Path.Combine(Root, "agent"));
         var l = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0); l.Start(); Port = ((IPEndPoint)l.LocalEndpoint).Port; l.Stop();
         _siteName = $"icc-it-deploy-site-{Id}";
