@@ -92,6 +92,8 @@ public sealed class AgentHub(
 
     public async Task ReportMaskedFile(MaskedFileResult result) { await EnsureCertificateActiveAsync(); pending.CompleteMasked(ServerId, result); }
 
+    public async Task ReportPoolResult(PoolOpResult result) { await EnsureCertificateActiveAsync(); pending.CompletePool(ServerId, result); }
+
     private async Task EnsureCertificateActiveAsync()
     {
         if (!await servers.IsCertificateActiveAsync(ServerId, Thumbprint))

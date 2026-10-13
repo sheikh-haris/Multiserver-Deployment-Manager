@@ -163,6 +163,10 @@ else if (_server is not null && _actor is not null)
         </MudTabPanel>
 
         <MudTabPanel Text="@($"App pools ({_inv?.Pools.Count ?? 0})")">
+            @if (_actor.Can(Permission.ViewServers, _server.EnvironmentName))
+            {
+                <MudButton Class="mb-2" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Tune" OnClick="@(() => Nav.NavigateTo($"/servers/{_server.Id}/pools"))">Manage app pools (start, stop, recycle, edit)</MudButton>
+            }
             <MudSimpleTable Dense="true" Hover="true">
                 <thead><tr><th>Name</th><th>Identity</th><th>.NET CLR</th><th>Pipeline</th><th>State</th></tr></thead>
                 <tbody>

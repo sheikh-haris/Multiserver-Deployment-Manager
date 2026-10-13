@@ -114,15 +114,26 @@ public class TargetServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Overlapping_folders_are_blocked_even_with_an_exception_reason()
+    public async Task The_same_folder_twice_is_blocked_even_with_an_exception_reason()
+    {
+        var (p, c1, s) = await Basic();
+        var c2 = await t.NewComponent(p, "Backend API");
+        await t.Store(s, new SiteSpec(1, "root", @"D:\Websites\pay", "A", ("/api", @"D:\Websites\pay", "B")));
+        await t.Link(c1, s, 1, "/");
+        var r = await t.Targets.LinkAsync(t.Admin, c2, s, 1, "/api", "please");
+        Assert.False(r.Ok);
+        Assert.Contains("exactly this folder", r.Error);
+    }
+
+    [Fact]
+    public async Task A_sub_application_in_a_sub_folder_of_its_site_can_be_its_own_component()
     {
         var (p, c1, s) = await Basic();
         var c2 = await t.NewComponent(p, "Backend API");
         await t.Store(s, new SiteSpec(1, "root", @"D:\Websites\pay", "A", ("/api", @"D:\Websites\pay\api", "B")));
         await t.Link(c1, s, 1, "/");
-        var r = await t.Targets.LinkAsync(t.Admin, c2, s, 1, "/api", "please");
-        Assert.False(r.Ok);
-        Assert.Contains("overlaps", r.Error);
+        var r = await t.Targets.LinkAsync(t.Admin, c2, s, 1, "/api", null);
+        Assert.True(r.Ok, r.Error);
     }
 
     [Fact]
@@ -245,11 +256,11 @@ public class TargetServiceTests : IDisposable
         var (p, c1, s) = await Basic(); var c2 = await t.NewComponent(p, "Other");
         await t.Store(s, new SiteSpec(1, "a", @"D:\Websites\a", "A"), new SiteSpec(2, "b", @"D:\Websites\b", "B"));
         var t1 = await t.Link(c1, s, 1); await t.Link(c2, s, 2);
-        await t.Store(s, new SiteSpec(1, "a", @"D:\Websites\b\inside", "A"), new SiteSpec(2, "b", @"D:\Websites\b", "B"));   // a moved INTO b's folder
+        await t.Store(s, new SiteSpec(1, "a", @"D:\Websites\b", "A"), new SiteSpec(2, "b", @"D:\Websites\b", "B"));   // a moved onto b's folder
         Assert.Equal(TargetStatus.Drifted, (await Load(t1)).Status);
         var r = await t.Targets.AcceptCurrentAsync(t.Admin, t1);
         Assert.False(r.Ok);
-        Assert.Contains("overlaps", r.Error);
+        Assert.Contains("exactly this folder", r.Error);
     }
 
     [Fact]

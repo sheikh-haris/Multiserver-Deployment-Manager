@@ -1,0 +1,87 @@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.subtitle1" Class="mb-1">@Pool.Name</MudText>
+        <MudText Typo="Typo.caption" Class="d-block mb-2">Only the settings below can be changed from the portal. Passwords and custom accounts cannot; use IIS Manager on the server for those.</MudText>
+        <MudGrid>
+            <MudItem xs="12" md="6"><MudSelect T="string" @bind-Value="_runtime" Label=".NET CLR version">
+                <MudSelectItem T="string" Value="@("")">No Managed Code</MudSelectItem><MudSelectItem T="string" Value="@("v2.0")">v2.0</MudSelectItem><MudSelectItem T="string" Value="@("v4.0")">v4.0</MudSelectItem></MudSelect></MudItem>
+            <MudItem xs="12" md="6"><MudSelect T="string" @bind-Value="_pipeline" Label="Managed pipeline mode">
+                <MudSelectItem T="string" Value="@("Integrated")">Integrated</MudSelectItem><MudSelectItem T="string" Value="@("Classic")">Classic</MudSelectItem></MudSelect></MudItem>
+            <MudItem xs="12" md="6"><MudSelect T="string" @bind-Value="_identity" Label="Identity">
+                @foreach (var i in PoolRules.Identities) { <MudSelectItem T="string" Value="@i">@i</MudSelectItem> }
+                @if (!PoolRules.Identities.Contains(_identity)) { <MudSelectItem T="string" Value="@_identity" Disabled="true">@_identity (cannot be chosen here)</MudSelectItem> }
+            </MudSelect></MudItem>
+            <MudItem xs="12" md="6"><MudSelect T="string" @bind-Value="_startMode" Label="Start mode">
+                <MudSelectItem T="string" Value="@("OnDemand")">OnDemand</MudSelectItem><MudSelectItem T="string" Value="@("AlwaysRunning")">AlwaysRunning</MudSelectItem></MudSelect></MudItem>
+            <MudItem xs="12" md="6"><MudNumericField T="int" @bind-Value="_idle" Label="Idle time-out (minutes, 0 = never)" Min="0" Max="1440" /></MudItem>
+            <MudItem xs="12" md="6"><MudNumericField T="int" @bind-Value="_queue" Label="Queue length" Min="10" Max="65535" /></MudItem>
+            <MudItem xs="12" md="6"><MudNumericField T="int" @bind-Value="_interval" Label="Recycle every (minutes, 0 = off)" Min="0" Max="525600" /></MudItem>
+            <MudItem xs="12" md="6"><MudNumericField T="long" @bind-Value="_memMb" Label="Private memory limit (MB, 0 = off)" Min="0" /></MudItem>
+            <MudItem xs="12"><MudTextField T="string" @bind-Value="_times" Label="Recycle at these times (local, HH:mm, separated by commas)" Immediate="true" Placeholder="03:30, 15:00" /></MudItem>
+            <MudItem xs="12" md="4"><MudSwitch T="bool" @bind-Value="_32" Label="Enable 32-bit applications" Color="Color.Primary" /></MudItem>
+            <MudItem xs="12" md="4"><MudSwitch T="bool" @bind-Value="_profile" Label="Load user profile" Color="Color.Primary" /></MudItem>
+            <MudItem xs="12" md="4"><MudSwitch T="bool" @bind-Value="_rapid" Label="Rapid-fail protection" Color="Color.Primary" /></MudItem>
+            <MudItem xs="12" md="6"><MudNumericField T="int" @bind-Value="_crashes" Label="Max crashes before the pool stops" Min="1" Max="1000" Disabled="@(!_rapid)" /></MudItem>
+        </MudGrid>
+        @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mt-2" Dense="true">@_error</MudAlert> }
+        @if (Change is { IsEmpty: false } && (Change.IdentityType is not null || Change.ManagedRuntimeVersion is not null || Change.PipelineMode is not null || Change.Enable32Bit is not null))
+        {
+            <MudAlert Severity="Severity.Warning" Class="mt-2" Dense="true">Changing the identity, CLR version, pipeline mode or 32-bit setting restarts the pool. Requests in progress are interrupted and the site can fail if the new identity cannot read its folder.</MudAlert>
+        }
+        @if (Change is { IsEmpty: true }) { <MudText Typo="Typo.caption" Class="mt-2">No changes yet.</MudText> }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(Change is null || Change.IsEmpty)" OnClick="Save">Save changes</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter, EditorRequired] public PoolRow Pool { get; set; } = default!;
+
+    private string _runtime = "", _pipeline = "Integrated", _identity = "ApplicationPoolIdentity", _startMode = "OnDemand", _times = "";
+    private int _idle, _queue, _interval, _crashes;
+    private long _memMb;
+    private bool _32, _profile, _rapid;
+    private string? _error;
+    private PoolConfig c0 = new();
+
+    protected override void OnInitialized()
+    {
+        c0 = Pool.Config ?? new PoolConfig();
+        _runtime = c0.ManagedRuntimeVersion ?? ""; _pipeline = c0.PipelineMode ?? "Integrated"; _identity = c0.IdentityType ?? Pool.Identity; _startMode = c0.StartMode ?? "OnDemand";
+        _idle = c0.IdleTimeoutMinutes ?? 0; _queue = c0.QueueLength ?? 1000; _interval = c0.RecycleIntervalMinutes ?? 0; _memMb = (c0.PrivateMemoryLimitKb ?? 0) / 1024;
+        _times = string.Join(", ", c0.RecycleTimes ?? []); _32 = c0.Enable32Bit ?? false; _profile = c0.LoadUserProfile ?? false; _rapid = c0.RapidFailProtection ?? true; _crashes = c0.RapidFailMaxCrashes ?? 5;
+    }
+
+    private IReadOnlyList<string> Times => (_times ?? "").Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).OrderBy(x => x).ToList();
+
+    /// <summary>Only the fields that differ from what was loaded.</summary>
+    private PoolConfig? Change => new PoolConfig
+    {
+        ManagedRuntimeVersion = _runtime != (c0.ManagedRuntimeVersion ?? "") ? _runtime : null,
+        PipelineMode = _pipeline != c0.PipelineMode ? _pipeline : null,
+        IdentityType = _identity != c0.IdentityType ? _identity : null,
+        StartMode = _startMode != c0.StartMode ? _startMode : null,
+        IdleTimeoutMinutes = _idle != c0.IdleTimeoutMinutes ? _idle : null,
+        QueueLength = _queue != c0.QueueLength ? _queue : null,
+        RecycleIntervalMinutes = _interval != c0.RecycleIntervalMinutes ? _interval : null,
+        PrivateMemoryLimitKb = _memMb * 1024 != (c0.PrivateMemoryLimitKb ?? 0) ? _memMb * 1024 : null,
+        RecycleTimes = !Times.SequenceEqual((c0.RecycleTimes ?? []).OrderBy(x => x)) ? Times : null,
+        Enable32Bit = _32 != c0.Enable32Bit ? _32 : null,
+        LoadUserProfile = _profile != c0.LoadUserProfile ? _profile : null,
+        RapidFailProtection = _rapid != c0.RapidFailProtection ? _rapid : null,
+        RapidFailMaxCrashes = _crashes != c0.RapidFailMaxCrashes && _rapid ? _crashes : null,
+    };
+
+    public sealed record Result(PoolConfig Change, PoolConfig Expected);
+
+    private void Save()
+    {
+        var ch = Change!;
+        var problems = PoolRules.Validate(ch);
+        if (problems.Count > 0) { _error = string.Join(" ", problems); return; }
+        Dialog.Close(DialogResult.Ok(new Result(ch, c0)));
+    }
+}

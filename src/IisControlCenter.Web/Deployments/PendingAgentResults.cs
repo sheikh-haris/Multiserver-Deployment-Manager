@@ -51,12 +51,30 @@ public sealed class PendingAgentResults(TimeProvider clock)
         return e.Tcs.TrySetResult(r);
     }
 
-    public void Forget(Guid commandId) { _manifests.TryRemove(commandId, out _); _masked.TryRemove(commandId, out _); }
+    private readonly ConcurrentDictionary<Guid, Entry<PoolOpResult>> _pools = new();
+
+    public Task<PoolOpResult> ExpectPool(Guid commandId, Guid serverId)
+    {
+        Sweep();
+        var e = new Entry<PoolOpResult>(serverId, new(TaskCreationOptions.RunContinuationsAsynchronously), clock.GetUtcNow().AddMinutes(10), null);
+        _pools[commandId] = e;
+        return e.Tcs.Task;
+    }
+
+    public bool CompletePool(Guid serverId, PoolOpResult r)
+    {
+        if (!_pools.TryGetValue(r.CommandId, out var e) || e.ServerId != serverId) return false;
+        _pools.TryRemove(r.CommandId, out _);
+        return e.Tcs.TrySetResult(r);
+    }
+
+    public void Forget(Guid commandId) { _manifests.TryRemove(commandId, out _); _masked.TryRemove(commandId, out _); _pools.TryRemove(commandId, out _); }
 
     private void Sweep()
     {
         var now = clock.GetUtcNow();
         foreach (var kv in _manifests.Where(k => k.Value.Expires < now).ToList()) { if (_manifests.TryRemove(kv.Key, out var e)) e.Tcs.TrySetCanceled(); }
         foreach (var kv in _masked.Where(k => k.Value.Expires < now).ToList()) { if (_masked.TryRemove(kv.Key, out var e)) e.Tcs.TrySetCanceled(); }
+        foreach (var kv in _pools.Where(k => k.Value.Expires < now).ToList()) { if (_pools.TryRemove(kv.Key, out var e)) e.Tcs.TrySetCanceled(); }
     }
 }

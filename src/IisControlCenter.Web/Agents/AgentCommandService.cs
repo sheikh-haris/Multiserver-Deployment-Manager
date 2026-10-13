@@ -84,6 +84,18 @@ public sealed class AgentCommandService(
         await hub.Clients.Client(c).RollbackRun(env, cmd); return OpResult.Success();
     }
 
+    public async Task<OpResult> SendPoolActionAsync(Server s, CommandEnvelope env, PoolActionCommand cmd)
+    {
+        var c = Connection(s); if (c is null) return OpResult.Fail($"The agent on {s.Name} is offline.");
+        await hub.Clients.Client(c).PoolAction(env, cmd); return OpResult.Success();
+    }
+
+    public async Task<OpResult> SendUpdatePoolAsync(Server s, CommandEnvelope env, UpdatePoolCommand cmd)
+    {
+        var c = Connection(s); if (c is null) return OpResult.Fail($"The agent on {s.Name} is offline.");
+        await hub.Clients.Client(c).UpdatePool(env, cmd); return OpResult.Success();
+    }
+
     public bool IsConnected(Guid serverId) => tracker.IsConnected(serverId);
 
     /// <summary>True once per issued command id for that server.</summary>

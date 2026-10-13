@@ -1,0 +1,156 @@
+@page "/servers/{Id:guid}/pools"
+@attribute [Authorize]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject PoolAdminService Pools
+@inject AgentCommandService Commands
+@inject ServerEventBus Bus
+@inject IDialogService Dialogs
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+<PageTitle>App pools</PageTitle>
+
+@if (_loaded && _page is null) { <MudAlert Severity="Severity.Warning">Server not found, or you do not have access to it.</MudAlert> }
+else if (_page is not null)
+{
+    var s = _page.Server;
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2" Wrap="Wrap.Wrap">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="@(() => Nav.NavigateTo($"/servers/{Id}"))" />
+        <MudText Typo="Typo.h4">App pools on @s.Name</MudText>
+        <StatusChip Status="@s.Mode.ToString()" />
+        @if (s.EnvironmentName is not null) { <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(s.EnvironmentName == "Prod" ? Color.Error : Color.Default)">@s.EnvironmentName</MudChip> }
+        <StatusChip Status="@(_page.AgentOnline ? "Online" : "Offline")" />
+    </MudStack>
+
+    @if (_page.WhyNot is not null) { <MudAlert Severity="Severity.Info" Class="mb-3">@_page.WhyNot</MudAlert> }
+    @if (_msg is not null) { <MudAlert Severity="@(_msgOk ? Severity.Success : Severity.Error)" Class="mb-3" ShowCloseIcon="true" CloseIconClicked="@(() => _msg = null)"><div style="white-space:pre-wrap">@_msg</div></MudAlert> }
+
+    <MudStack Row="true" Class="mb-2" Spacing="2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+        <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.PlayArrow" Disabled="@(!CanDo)" OnClick="@(() => Do(PoolActions.Start))">Start</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Autorenew" Disabled="@(!CanDo)" OnClick="@(() => Do(PoolActions.Recycle))">Recycle</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Stop" Disabled="@(!CanDo)" OnClick="@(() => Do(PoolActions.Stop))">Stop</MudButton>
+        <MudText Typo="Typo.body2">@_selected.Count selected</MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" Disabled="@(!_page.AgentOnline || _busy)" OnClick="Refresh">Refresh from server</MudButton>
+    </MudStack>
+
+    @if (_busy) { <MudProgressLinear Indeterminate="true" Class="mb-2" /> }
+
+    <MudSimpleTable Dense="true" Hover="true">
+        <thead><tr>
+            <th><MudCheckBox T="bool" Value="@(_page.Pools.Count > 0 && _selected.Count == _page.Pools.Count)" ValueChanged="SelectAll" Disabled="@(!_page.CanAct)" /></th>
+            <th>Pool</th><th>State</th><th>CLR</th><th>Pipeline</th><th>Identity</th><th>Used by</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var p in _page.Pools)
+        {
+            var pool = p;
+            <tr>
+                <td><MudCheckBox T="bool" Value="@_selected.Contains(pool.Name)" ValueChanged="@(v => Toggle(pool.Name, v))" Disabled="@(!_page.CanAct)" /></td>
+                <td><b>@p.Name</b></td>
+                <td><StatusChip Status="@p.State" /></td>
+                <td>@(string.IsNullOrEmpty(p.Runtime) ? "No managed code" : p.Runtime)</td>
+                <td>@p.Pipeline</td>
+                <td>@p.Identity @if (p.Identity is "LocalSystem" or "SpecificUser") { <MudTooltip Text="Runs with high rights or a custom account"><MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Color="Color.Warning" /></MudTooltip> }</td>
+                <td>
+                    @foreach (var c in p.Components) { <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">@c</MudChip> }
+                    @foreach (var st in p.Sites) { <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@st</MudChip> }
+                    @if (p.Sites.Count == 0 && p.Components.Count == 0) { <MudText Typo="Typo.caption">unused</MudText> }
+                </td>
+                <td>@if (_page.CanAct && p.Config is not null) { <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Edit" OnClick="@(() => Edit(pool))">Edit</MudButton> }
+                    else if (p.Config is null) { <MudTooltip Text="This agent is too old to report pool settings. Upgrade it."><MudText Typo="Typo.caption">n/a</MudText></MudTooltip> }</td>
+            </tr>
+        }
+        </tbody>
+    </MudSimpleTable>
+    @if (_page.Pools.Count == 0) { <MudText Class="pa-3">No app pools found yet. Run discovery on the server page.</MudText> }
+}
+else { <MudProgressLinear Indeterminate="true" /> }
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private Actor? _actor;
+    private PoolPage? _page;
+    private bool _loaded, _busy, _msgOk;
+    private string? _msg;
+    private readonly HashSet<string> _selected = new(StringComparer.OrdinalIgnoreCase);
+    private bool CanDo => _page is { CanAct: true } && _selected.Count > 0 && !_busy;
+
+    protected override async Task OnInitializedAsync() { Bus.Changed += OnChanged; await Load(); }
+    protected override async Task OnParametersSetAsync() => await Load();
+
+    private async Task Load()
+    {
+        _actor = await Actors.GetAsync();
+        _page = await Pools.GetAsync(_actor, Id);
+        _loaded = true;
+        _selected.IntersectWith(_page?.Pools.Select(p => p.Name) ?? []);
+    }
+
+    private void OnChanged(ServerChanged e) { if (e.ServerId == Id) _ = InvokeAsync(async () => { await Load(); StateHasChanged(); }); }
+    private void Toggle(string name, bool on) { if (on) _selected.Add(name); else _selected.Remove(name); }
+    private void SelectAll(bool on) { _selected.Clear(); if (on) foreach (var p in _page!.Pools) _selected.Add(p.Name); }
+
+    private bool IsProd => _page?.Server.EnvironmentName == "Prod";
+
+    private async Task Do(string action)
+    {
+        var chosen = _page!.Pools.Where(p => _selected.Contains(p.Name)).ToList();
+        var impact = chosen.SelectMany(p => p.Components.Concat(p.Sites)).Distinct().ToList();
+        var verb = action switch { PoolActions.Stop => "STOP", PoolActions.Recycle => "recycle", _ => "start" };
+        var text = $"{verb} {chosen.Count} app pool(s) on {_page.Server.Name}: {string.Join(", ", chosen.Select(p => p.Name))}." +
+                   (action != PoolActions.Start && impact.Count > 0 ? $" This affects: {string.Join(", ", impact)}." : "") +
+                   (action == PoolActions.Stop ? " Sites using these pools will be unavailable until they are started again." : action == PoolActions.Recycle ? " Requests in progress may fail briefly." : "");
+        var confirmed = action == PoolActions.Start;
+        if (!confirmed)
+        {
+            if (IsProd)
+            {
+                var dlg = await Dialogs.ShowAsync<ConfirmDangerDialog>($"PRODUCTION: {verb} pools", new DialogParameters<ConfirmDangerDialog> { { x => x.Message, text }, { x => x.ConfirmText, "PROD" }, { x => x.ButtonText, char.ToUpper(verb[0]) + verb[1..] } });
+                confirmed = (await dlg.Result) is { Canceled: false };
+            }
+            else confirmed = await Dialogs.ShowMessageBoxAsync($"{char.ToUpper(verb[0]) + verb[1..]} pools?", text, yesText: char.ToUpper(verb[0]) + verb[1..], cancelText: "Cancel") == true;
+            if (!confirmed) return;
+        }
+        _busy = true; StateHasChanged();
+        try
+        {
+            var results = await Pools.ActAsync(_actor!, Id, chosen.Select(p => p.Name).ToList(), action, confirmed);
+            _msgOk = results.All(r => r.Ok);
+            _msg = string.Join("\n", results.Select(r => (r.Ok ? "✔ " : "✘ ") + (r.Pool.Length > 0 ? r.Pool + ": " : "") + r.Message));
+        }
+        catch (ForbiddenException ex) { _msgOk = false; _msg = ex.Message; }
+        _busy = false;
+        await Load();
+    }
+
+    private async Task Edit(PoolRow p)
+    {
+        var dlg = await Dialogs.ShowAsync<PoolEditDialog>($"Edit app pool", new DialogParameters<PoolEditDialog> { { x => x.Pool, p } }, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var res = await dlg.Result;
+        if (res is not { Canceled: false } || res.Data is not PoolEditDialog.Result r) return;
+        var confirmed = !IsProd;
+        if (IsProd)
+        {
+            var d2 = await Dialogs.ShowAsync<ConfirmDangerDialog>("PRODUCTION: change app pool", new DialogParameters<ConfirmDangerDialog> { { x => x.Message, $"Change settings of {p.Name} on {_page!.Server.Name}. It affects: {string.Join(", ", p.Components.Concat(p.Sites).DefaultIfEmpty("nothing linked"))}." }, { x => x.ConfirmText, "PROD" }, { x => x.ButtonText, "Change" } });
+            confirmed = (await d2.Result) is { Canceled: false };
+            if (!confirmed) return;
+        }
+        _busy = true; StateHasChanged();
+        try
+        {
+            var o = await Pools.UpdateAsync(_actor!, Id, p.Name, r.Change, r.Expected, confirmed);
+            _msgOk = o.Ok; _msg = o.Ok ? $"✔ {p.Name} saved." : "✘ " + o.Error;
+        }
+        catch (ForbiddenException ex) { _msgOk = false; _msg = ex.Message; }
+        _busy = false;
+        await Load();
+    }
+
+    private async Task Refresh()
+    {
+        try { var r = await Commands.RequestDiscoveryAsync(_actor!, Id); Snackbar.Add(r.Ok ? "Asked the server. The list updates when it answers." : r.Error ?? "Failed", r.Ok ? Severity.Info : Severity.Error); }
+        catch (ForbiddenException ex) { Snackbar.Add(ex.Message, Severity.Error); }
+    }
+
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

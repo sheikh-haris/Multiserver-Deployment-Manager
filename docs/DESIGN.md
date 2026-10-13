@@ -11,6 +11,8 @@ Status: **v0.2. No code written. Waiting for your written approval (section 14).
 | D1 | **Local-config model accepted.** The installer fixes environment and allowed root folders (e.g. `D:\Websites`) in a local file on each server. The agent only works inside them. Changing them needs a re-run of the installer on that server. |
 | D2 | **Agent hostname:** two DNS names, both on port 443. `portal.<domain>` for people, `agents.<domain>` for agents (client certificate required only on the agents name). |
 | D3 | **No certificate management in the portal.** No PFX upload, no HTTPS binding. Certificates are discovered read-only (for the expiry report). Phase 4 creates HTTP bindings only; HTTPS bindings stay in IIS Manager. |
+| D11 | **Sites and sub-applications in nested folders are allowed** (decided after Phase 3). Only the exact same folder twice is blocked. While deploying to a parent, folders of other IIS applications/virtual directories inside it are protected like data folders. |
+| D12 | **App pool start/stop/recycle/edit** (Phase 4a): Server Operator or Platform Admin, server must be Managed (portal and local switch), fixed list of settings, built-in identities only, stale-edit protection, full audit. |
 | D4 | **Approver** is an ordinary role assigned in the admin panel per project and environment. Only a Platform Admin can assign it. |
 | D5 | **Self-approval is a setting** per project and environment. Default off. Platform Admin can switch it on. Every self-approved request is badged **Self-approved**, and **every** approval, with or without self-approval, is audited. A report lists self-approved deployments (Production first). |
 | D6 | **Portal host:** Windows Server. Defender exists but the portal account has no admin rights (see D7). |

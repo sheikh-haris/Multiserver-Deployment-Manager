@@ -684,6 +684,9 @@ namespace IisControlCenter.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("ConfigJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("IdentityType")
                         .IsRequired()
                         .HasMaxLength(50)

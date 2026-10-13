@@ -373,6 +373,7 @@ public sealed class ServerService(
             {
                 Id = Guid.NewGuid(), ServerId = serverId, Name = Trunc(p.Name, 300)!, IdentityType = Trunc(p.IdentityType, 50)!,
                 RuntimeVersion = Trunc(p.RuntimeVersion, 30), PipelineMode = Trunc(p.PipelineMode, 30)!, State = Trunc(p.State, 30)!,
+                ConfigJson = p.Config is null ? null : System.Text.Json.JsonSerializer.Serialize(p.Config),
             });
         foreach (var c in r.Certificates)
             db.IisCertificates.Add(new IisCertificate

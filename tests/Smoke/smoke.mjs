@@ -1,7 +1,7 @@
 import { createRequire } from 'module';
 import fs from 'fs';
 const { chromium } = createRequire(import.meta.url)('playwright');
-const { PORTAL, PID, CID, W, OUT, SITE_PORT } = process.env;
+const { PORTAL, PID, CID, SID, W, OUT, SITE_PORT } = process.env;
 const must = (c, m) => { if (!c) { throw new Error('ASSERT: ' + m); } console.log('ok -', m); };
 const read = f => fs.readFileSync(`${W}/websites/shop/${f}`, 'utf8').trim();
 const browser = await chromium.launch({ executablePath: process.env.CHROME || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] });
@@ -111,7 +111,40 @@ for (let i = 0; i < 60; i++) { const s = await (await page0.request.get(`${PORTA
 must(read('index.html').includes('version 1'), 'manual rollback restored version 1');
 await dep.reload(); await shot(dep, '07-manual-rollback');
 
-// ---------- 6. pages that must load ----------
+// ---------- 6. app pools: read-only first, then Managed ----------
+const op = await person('operator');                       // Server Operator for Dev
+await op.goto(`${PORTAL}/servers/${SID}/pools`); await op.waitForLoadState('networkidle');
+await op.getByText('ShopPool').first().waitFor();
+await shot(op, '08-pools-readonly');
+must(await op.getByText(/ReadOnly/).count() > 0, 'a ReadOnly server explains why pools cannot be changed');
+must(await op.getByRole('button', { name: 'Stop', exact: true }).isDisabled(), 'Stop is disabled on a ReadOnly server');
+
+await page0.request.post(`${PORTAL}/dev/e2e/mode?serverId=${SID}&mode=Managed`);
+await op.reload(); await op.waitForLoadState('networkidle');
+const row = op.locator('tr', { hasText: 'ShopPool' });
+await row.locator('input[type=checkbox]').check();
+await op.getByRole('button', { name: 'Stop', exact: true }).click();
+await op.locator('.mud-dialog-container').getByRole('button', { name: /^stop$/i }).click();          // confirm in the dialog
+await op.getByText(/ShopPool: Started → Stopped/).waitFor({ timeout: 30000 });
+must(await row.getByText('Stopped').count() > 0, 'the pool shows Stopped after Stop');
+await shot(op, '09-pool-stopped');
+await op.getByRole('button', { name: 'Start', exact: true }).click();
+await op.getByText(/ShopPool: Stopped → Started/).waitFor({ timeout: 30000 });
+await op.getByRole('button', { name: 'Recycle', exact: true }).click();
+await op.locator('.mud-dialog-container').getByRole('button', { name: 'Recycle', exact: true }).click();
+await op.getByText(/ShopPool: Already Started/).waitFor({ timeout: 30000 });
+must(true, 'start and recycle work');
+
+await row.getByRole('button', { name: 'Edit' }).click();
+await op.getByLabel('Queue length').fill('2500'); await op.getByLabel('Queue length').press('Tab');
+await op.getByRole('button', { name: 'Save changes' }).click();
+await op.getByText(/ShopPool saved/).waitFor({ timeout: 30000 });
+await shot(op, '10-pool-edited');
+await row.getByRole('button', { name: 'Edit' }).click();
+must(await op.getByLabel('Queue length').inputValue() === '2500', 'the edited value is shown when the pool is opened again');
+await op.getByRole('button', { name: 'Cancel' }).click();
+
+// ---------- 7. pages that must load ----------
 for (const p of ['/deployments', '/', `/projects/${PID}`, '/reports/deployments']) {
   await page0.goto(`${PORTAL}${p}`); await page0.waitForLoadState('networkidle'); await shot(page0, 'page' + p.replace(/\W+/g, '-'));
 }

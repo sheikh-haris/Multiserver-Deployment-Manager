@@ -7,9 +7,9 @@
 
     private Color _color => Status switch
     {
-        "Online" or "Succeeded" or "Active" or "Managed" or "Running" or "Approved" => Color.Success,
-        "Pending" or "Submitted" or "Scheduled" or "Drifted" or "NeedsReapproval" => Color.Warning,
-        "Offline" or "Failed" or "Denied" or "Missing" or "RollbackFailed" => Color.Error,
+        "Online" or "Succeeded" or "Active" or "Managed" or "Running" or "Approved" or "Started" => Color.Success,
+        "Pending" or "Submitted" or "Scheduled" or "Drifted" or "NeedsReapproval" or "Starting" or "Stopping" => Color.Warning,
+        "Offline" or "Failed" or "Denied" or "Missing" or "RollbackFailed" or "Stopped" => Color.Error,
         "Revoked" or "Rejected" or "Expired" or "Cancelled" => Color.Dark,
         "RolledBack" => Color.Secondary,
         "ReadOnly" or "Unassigned" => Color.Info,

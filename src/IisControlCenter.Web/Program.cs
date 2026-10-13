@@ -111,6 +111,7 @@ builder.Services.AddScoped<DiscoveryJob>();
 builder.Services.AddScoped<ReconciliationJob>();
 builder.Services.AddScoped<Reconciler>();
 builder.Services.AddScoped<ProjectService>();
+builder.Services.AddScoped<PoolAdminService>();
 builder.Services.AddScoped<MembershipService>();
 builder.Services.AddScoped<TargetService>();
 builder.Services.AddScoped<DriftQueries>();
@@ -295,6 +296,11 @@ if (authMode == "Dev" && isDev)
     app.MapPost("/dev/e2e/approve-request", async (string persona, Guid id, DeploymentService deployments, AccessService access) =>
     {
         var r = await deployments.ApproveAsync(await PersonaActor(persona, access), id);
+        return r.Ok ? Results.Ok() : Results.BadRequest(r.Error);
+    }).AllowAnonymous();
+    app.MapPost("/dev/e2e/mode", async (Guid serverId, string mode, ServerService svc, TimeProvider clock) =>
+    {
+        var r = await svc.SetModeAsync(E2EActor(clock), serverId, Enum.Parse<ServerMode>(mode));
         return r.Ok ? Results.Ok() : Results.BadRequest(r.Error);
     }).AllowAnonymous();
     app.MapGet("/dev/e2e/request", async (Guid id, IDbContextFactory<AppDbContext> dbf) =>

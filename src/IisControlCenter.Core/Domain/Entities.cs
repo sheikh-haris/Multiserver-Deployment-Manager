@@ -116,6 +116,8 @@ public class IisAppPool
     public string? RuntimeVersion { get; set; }
     public string PipelineMode { get; set; } = "";
     public string State { get; set; } = "";
+    /// <summary>The editable settings (<c>PoolConfig</c>) as JSON. Null for agents older than contract version 3. Never holds a password.</summary>
+    public string? ConfigJson { get; set; }
 }
 
 public class IisCertificate

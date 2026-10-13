@@ -32,6 +32,12 @@ public sealed class RecordingAgentClient : IAgentClient
     public Task GetMaskedFile(CommandEnvelope e, MaskedFileRequest r) { MaskedFiles.Add((e, r)); return OnMaskedFile?.Invoke(e, r) ?? Task.CompletedTask; }
     public Task Deploy(CommandEnvelope e, DeployCommand c) { Deploys.Add((e, c)); return OnDeploy?.Invoke(e, c) ?? Task.CompletedTask; }
     public Task RollbackRun(CommandEnvelope e, RollbackCommand c) { Rollbacks.Add((e, c)); return OnRollback?.Invoke(e, c) ?? Task.CompletedTask; }
+    public List<(CommandEnvelope Env, PoolActionCommand Command)> PoolActionsSent { get; } = [];
+    public List<(CommandEnvelope Env, UpdatePoolCommand Command)> PoolUpdatesSent { get; } = [];
+    public Func<CommandEnvelope, PoolActionCommand, Task>? OnPoolAction { get; set; }
+    public Func<CommandEnvelope, UpdatePoolCommand, Task>? OnUpdatePool { get; set; }
+    public Task PoolAction(CommandEnvelope e, PoolActionCommand c) { PoolActionsSent.Add((e, c)); return OnPoolAction?.Invoke(e, c) ?? Task.CompletedTask; }
+    public Task UpdatePool(CommandEnvelope e, UpdatePoolCommand c) { PoolUpdatesSent.Add((e, c)); return OnUpdatePool?.Invoke(e, c) ?? Task.CompletedTask; }
     public Task Disconnect(string reason) { Disconnects.Add(reason); return Task.CompletedTask; }
 }
 
