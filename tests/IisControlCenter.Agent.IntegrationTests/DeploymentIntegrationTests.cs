@@ -188,7 +188,7 @@ public class DeploymentIntegrationTests : IClassFixture<DeployIisFixture>
         Reset(("health.txt", "ok"), ("locked.dll", "LOCKED v1"), ("index.html", "version 1"));
         var zip = Zip(("index.html", "version 2"), ("locked.dll", "LOCKED v2"));
         var cmd = Command(zip);
-        using var hold = new FileStream(Path.Combine(fx.Web, "locked.dll"), FileMode.Open, FileAccess.Read, FileShare.None);   // like a DLL held by a running app
+        using var hold = new FileStream(Path.Combine(fx.Web, "locked.dll"), FileMode.Open, FileAccess.Read, FileShare.Read);   // like a DLL loaded by a running app: others may read it (backup) but not replace it
         var r = await Executor(zip, copyRetries: 2).DeployAsync(cmd, new Reporter(), default);
 
         Assert.Equal(RunResults.RolledBack, r.Result);
