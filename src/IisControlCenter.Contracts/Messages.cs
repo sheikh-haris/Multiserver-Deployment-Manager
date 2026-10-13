@@ -3,8 +3,8 @@ namespace IisControlCenter.Contracts;
 /// <summary>Bump when a breaking change is made to any message below.</summary>
 public static class ContractInfo
 {
-    public const int Version = 2;
-    public const int MinimumAgentVersion = 2;   // Phase 3 agents understand deployment commands
+    public const int Version = 3;
+    public const int MinimumAgentVersion = 3;   // v2: deployment commands. v3: app pool commands and pool settings in discovery
 
     public static class Routes
     {
@@ -58,6 +58,8 @@ public interface IAgentClient
     Task GetMaskedFile(CommandEnvelope envelope, MaskedFileRequest request);
     Task Deploy(CommandEnvelope envelope, DeployCommand command);
     Task RollbackRun(CommandEnvelope envelope, RollbackCommand command);
+    Task PoolAction(CommandEnvelope envelope, PoolActionCommand command);
+    Task UpdatePool(CommandEnvelope envelope, UpdatePoolCommand command);
     /// <summary>Tells the agent its certificate was revoked or the server removed. Agent stops reconnecting.</summary>
     Task Disconnect(string reason);
 }
@@ -119,7 +121,11 @@ public sealed record DiscoveredAppPool(
     string IdentityType,
     string? RuntimeVersion,
     string PipelineMode,
-    string State);
+    string State)
+{
+    /// <summary>The settings the portal can change. Filled by agents version 3 and newer.</summary>
+    public PoolConfig? Config { get; init; }
+}
 
 public sealed record DiscoveredCertificate(
     string Thumbprint,

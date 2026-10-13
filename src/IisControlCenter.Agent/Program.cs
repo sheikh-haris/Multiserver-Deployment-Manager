@@ -15,7 +15,7 @@ if (args.Length > 0 && args[0] == "version")
 if (args.Length > 0 && args[0] == "discover")
 {
     // Prints exactly what the agent would send for discovery. Read only. Useful to show security reviewers.
-    IIisInspector inspector = OperatingSystem.IsWindows() ? new IisInspector() : new SampleInspector();
+    IIisInspector inspector = OperatingSystem.IsWindows() ? new IisInspector() : new SampleInspector(new SamplePoolAdmin());
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(inspector.Collect(Guid.Empty), new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
     return 0;
 }
@@ -29,8 +29,18 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<CommandPolicy>();
 
 // The sample inspector exists only for development on non-Windows machines.
-if (OperatingSystem.IsWindows()) builder.Services.AddSingleton<IIisInspector, IisInspector>();
-else builder.Services.AddSingleton<IIisInspector, SampleInspector>();
+if (OperatingSystem.IsWindows())
+{
+    builder.Services.AddSingleton<IIisInspector, IisInspector>();
+    builder.Services.AddSingleton<IPoolAdmin, IisPoolAdmin>();
+}
+else
+{
+    builder.Services.AddSingleton<SamplePoolAdmin>();
+    builder.Services.AddSingleton<IPoolAdmin>(sp => sp.GetRequiredService<SamplePoolAdmin>());
+    builder.Services.AddSingleton<IIisInspector, SampleInspector>();
+}
+builder.Services.AddSingleton<IisControlCenter.Agent.Pools.PoolHandler>();
 
 // ---- deployment services ----
 var dataDir = config.SourcePath is null ? AgentConfig.DefaultDirectory : Path.GetDirectoryName(config.SourcePath)!;

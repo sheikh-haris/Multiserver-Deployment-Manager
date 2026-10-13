@@ -57,11 +57,16 @@ public sealed class IisInspector : IIisInspector
                     p.ProcessModel.IdentityType.ToString(),    // type only; password is never read
                     string.IsNullOrEmpty(p.ManagedRuntimeVersion) ? null : p.ManagedRuntimeVersion,
                     p.ManagedPipelineMode.ToString(),
-                    SafeState(() => p.State.ToString())));
+                    SafeState(() => p.State.ToString())) { Config = SafeConfig(p) });
             }
         }
 
         return new DiscoveryResult(commandId, now, iis, sites, pools, ReadCertificates(), DotNetVersions.Read());
+    }
+
+    private static PoolConfig? SafeConfig(ApplicationPool p)
+    {
+        try { return IisPoolAdmin.Read(p); } catch { return null; }      // a pool with a broken setting must not break discovery
     }
 
     private static string Expand(string? p) => string.IsNullOrEmpty(p) ? "" : Environment.ExpandEnvironmentVariables(p);

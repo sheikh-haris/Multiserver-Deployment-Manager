@@ -25,7 +25,7 @@ public class DiscoveryContractTests
     [Fact]
     public void Sample_inspector_produces_data_that_exercises_the_report_cases()
     {
-        var r = new SampleInspector().Collect(Guid.NewGuid());
+        var r = new SampleInspector(new SamplePoolAdmin()).Collect(Guid.NewGuid());
         Assert.NotEmpty(r.Sites);
         Assert.Contains(r.AppPools, p => p.IdentityType == "LocalSystem");
         Assert.Contains(r.Certificates, c => c.NotAfter < DateTimeOffset.UtcNow.AddDays(30));

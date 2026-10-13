@@ -20,6 +20,7 @@ public sealed class AgentWorker(
     ILogger<AgentWorker> log) : BackgroundService
 {
     private IisControlCenter.Agent.Deploy.RunCoordinator? _runs;
+    private IisControlCenter.Agent.Pools.PoolHandler? _pools;
     private static readonly TimeSpan HeartbeatEvery = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RetryAfterRejection = TimeSpan.FromMinutes(5);
     private HubConnection? _hub;
@@ -38,6 +39,7 @@ public sealed class AgentWorker(
 
         var channel = new IisControlCenter.Agent.Deploy.HubPortalChannel(config, () => _hub, () => _cert);
         _runs = ActivatorUtilities.CreateInstance<IisControlCenter.Agent.Deploy.RunCoordinator>(services, (IisControlCenter.Agent.Deploy.IPortalChannel)channel);
+        _pools = services.GetRequiredService<IisControlCenter.Agent.Pools.PoolHandler>();
         try { _runs.RecoverAfterRestart(ct); }       // undo any deployment that was cut off by a crash or reboot
         catch (Exception ex) { log.LogError(ex, "Recovery after restart failed"); }
 
@@ -154,6 +156,8 @@ public sealed class AgentWorker(
         hub.On<CommandEnvelope, MaskedFileRequest>(nameof(IAgentClient.GetMaskedFile), (e, r) => _ = Guard(() => _runs!.HandleMaskedFileAsync(e, r, _stopping.Token), "masked file"));
         hub.On<CommandEnvelope, DeployCommand>(nameof(IAgentClient.Deploy), (e, c) => _ = Guard(() => _runs!.HandleDeployAsync(e, c, _stopping.Token), "deploy"));
         hub.On<CommandEnvelope, RollbackCommand>(nameof(IAgentClient.RollbackRun), (e, c) => _ = Guard(() => _runs!.HandleRollbackAsync(e, c, _stopping.Token), "rollback"));
+        hub.On<CommandEnvelope, PoolActionCommand>(nameof(IAgentClient.PoolAction), (e, c) => _ = Guard(async () => await ReportPoolAsync(await _pools!.ActAsync(e, c)), "pool action"));
+        hub.On<CommandEnvelope, UpdatePoolCommand>(nameof(IAgentClient.UpdatePool), (e, c) => _ = Guard(async () => await ReportPoolAsync(await _pools!.UpdateAsync(e, c)), "pool update"));
         hub.On<string>(nameof(IAgentClient.Disconnect), reason =>
         {
             log.LogWarning("Portal asked this agent to disconnect: {Reason}. Not reconnecting until the service restarts.", reason);
@@ -211,6 +215,11 @@ public sealed class AgentWorker(
             log.LogError(ex, "Discovery failed");
             await RejectAsync(e, "Discovery failed on the server: " + ex.GetType().Name);
         }
+    }
+
+    private async Task ReportPoolAsync(PoolOpResult result)
+    {
+        if (_hub is { State: HubConnectionState.Connected } h) await h.InvokeAsync("ReportPoolResult", result);
     }
 
     private async Task RejectAsync(CommandEnvelope e, string reason)
