@@ -204,6 +204,41 @@ else if (_view is not null)
             </MudSimpleTable>
         </MudTabPanel>
 
+        <MudTabPanel Text="Versions">
+            <MudText Typo="Typo.body2" Class="mb-2">What each environment runs now: the last successful deployment that was not rolled back. Only deployments made through this portal are known.</MudText>
+            <MudSimpleTable Dense="true">
+                <thead><tr><th>Component</th>@foreach (var e in new[] { "Dev", "Staging", "Prod" }) { <th>@e</th> }</tr></thead>
+                <tbody>
+                @foreach (var v in _versions)
+                {
+                    <tr>
+                        <td><b>@v.ComponentName</b></td>
+                        @foreach (var e in new[] { "Dev", "Staging", "Prod" })
+                        {
+                            <td>
+                                @if (!v.Cells.ContainsKey(e)) { <MudText Typo="Typo.caption">hidden</MudText> }
+                                else if (v.Cells[e] is { } c)
+                                {
+                                    <MudLink Href="@($"/deployments/{c.RequestId}")">@c.PackageName</MudLink>
+                                    <div class="mono" style="font-size:11px">@c.Sha256[..8] · @c.At.ToLocalTime().ToString("MM-dd HH:mm")</div>
+                                    <div style="font-size:11px">@c.By @if (!string.IsNullOrEmpty(c.Source)) { <span>· @c.Source</span> }</div>
+                                    @if (c.IsDirectToProd) { <MudChip T="string" Size="Size.Small" Color="Color.Error">direct</MudChip> }
+                                    @if (c.SelfApproved) { <MudChip T="string" Size="Size.Small" Color="Color.Warning">self-approved</MudChip> }
+                                }
+                                else if (v.EnvironmentsWithTargets.Contains(e)) { <MudText Typo="Typo.caption">nothing deployed yet</MudText> }
+                                else { <MudText Typo="Typo.caption">no target</MudText> }
+                                @if (e == "Prod" && v.Cells.TryGetValue("Staging", out var st) && st is not null && v.Cells.TryGetValue("Prod", out var pr) && (pr is null || pr.Sha256 != st.Sha256))
+                                {
+                                    <div><MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">Staging is ahead</MudChip></div>
+                                }
+                            </td>
+                        }
+                    </tr>
+                }
+                </tbody>
+            </MudSimpleTable>
+        </MudTabPanel>
+
         <MudTabPanel Text="History">
             <RequestTable Rows="_history" Empty="No deployments for this project yet." />
         </MudTabPanel>
@@ -250,6 +285,7 @@ else { <MudProgressLinear Indeterminate="true" /> }
     private Actor? _actor;
     private bool _loaded;
     private IReadOnlyList<RequestRow> _history = [];
+    private IReadOnlyList<VersionRow> _versions = [];
     private readonly Dictionary<Guid, ProtectedListConfirmation?> _confirmed = new();
     private string? _newPath, _notifyEmail;
     private ProtectedPathKind _newKind = ProtectedPathKind.DataFolder;
@@ -265,6 +301,7 @@ else { <MudProgressLinear Indeterminate="true" /> }
         if (_view is not null)
         {
             _history = await DeploymentsSvc.ListAsync(_actor, projectId: Id, take: 100);
+            _versions = await DeploymentsSvc.VersionsAsync(_actor, Id);
             _notifyEmail = _view.Project.NotificationEmail;
             _confirmed.Clear();
             foreach (var c in _view.Components) _confirmed[c.Id] = await ProtectedLists.GetConfirmationAsync(c.Id);

@@ -22,6 +22,29 @@ else
         <MudTabPanel Text="@($"Waiting for my approval ({_queue.Count})")" BadgeData="@(_queue.Count > 0 ? _queue.Count : null)" BadgeColor="Color.Warning">
             <RequestTable Rows="_queue" ShowProgress="true" Empty="Nothing is waiting for you." />
         </MudTabPanel>
+        <MudTabPanel Text="@($"Ready to promote ({_promote.Count})")" BadgeData="@(_promote.Count > 0 ? _promote.Count : null)" BadgeColor="Color.Info">
+            @if (_promote.Count == 0) { <MudText Class="pa-4">Nothing is waiting. A package shows here once it succeeded on Staging and is not in Production yet.</MudText> }
+            else
+            {
+                <MudSimpleTable Dense="true" Hover="true">
+                    <thead><tr><th>Project / component</th><th>Package (Staging)</th><th>Source</th><th>On Staging since</th><th>Production now</th><th></th></tr></thead>
+                    <tbody>
+                    @foreach (var p in _promote)
+                    {
+                        var row = p;
+                        <tr>
+                            <td>@row.Request.ProjectName / @row.Request.ComponentName</td>
+                            <td>@row.Request.PackageName <span class="mono">(@row.Sha256[..8]…)</span></td>
+                            <td>@row.Request.SourceReference</td>
+                            <td>@row.Request.RequestedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                            <td>@(row.RunningInProd ?? "nothing yet")</td>
+                            <td><MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning" StartIcon="@Icons.Material.Filled.ArrowUpward" OnClick="@(() => Nav.NavigateTo($"/deployments/new?component={row.ComponentId}&env=Prod&package={PackageOf(row)}"))">Promote to Production</MudButton></td>
+                        </tr>
+                    }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </MudTabPanel>
         <MudTabPanel Text="My requests"><RequestTable Rows="_mine" Empty="You have not submitted anything." /></MudTabPanel>
         <MudTabPanel Text="Open"><RequestTable Rows="_open" Empty="Nothing is in progress." /></MudTabPanel>
         <MudTabPanel Text="History"><RequestTable Rows="_all" Empty="No deployments yet." /></MudTabPanel>
@@ -31,6 +54,9 @@ else
 @code {
     private Actor? _actor;
     private IReadOnlyList<RequestRow>? _queue, _mine, _open, _all;
+    private IReadOnlyList<PromotableRow> _promote = [];
+    private readonly Dictionary<Guid, Guid> _packageByRequest = new();
+    private Guid PackageOf(PromotableRow r) => _packageByRequest.GetValueOrDefault(r.Request.Id);
     private int _tab;
 
     protected override async Task OnInitializedAsync()
@@ -46,6 +72,9 @@ else
         _mine = await Deployments.ListAsync(_actor!, onlyMine: true);
         _open = await Deployments.ListAsync(_actor!, onlyOpen: true);
         _all = await Deployments.ListAsync(_actor!);
+        _promote = await Deployments.PromotableAsync(_actor!);
+        _packageByRequest.Clear();
+        foreach (var p in _promote) _packageByRequest[p.Request.Id] = await Deployments.PackageIdOfRequestAsync(p.Request.Id);
     }
 
     private void OnChanged(DeploymentChanged e)

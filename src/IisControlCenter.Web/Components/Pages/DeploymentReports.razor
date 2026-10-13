@@ -4,8 +4,19 @@
 @inject DeploymentService Deployments
 @inject NavigationManager Nav
 @using IisControlCenter.Web.Deployments
-<PageTitle>Deployment reports</PageTitle>
-<MudText Typo="Typo.h4" Class="mb-3">Deployment reports</MudText>
+<PageTitle>Reports</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-3">Reports</MudText>
+
+<MudPaper Outlined="true" Class="pa-3 mb-4">
+    <MudText Typo="Typo.h6" Class="mb-1">Downloads (CSV)</MudText>
+    <MudText Typo="Typo.body2" Class="mb-2">You only get what you are allowed to see. Every download is written to the audit log.</MudText>
+    <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap">
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Download" Href="@DeploymentsCsv" Target="_blank">Deployment history (dates below)</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Download" Href="/export/inventory.csv" Target="_blank">Servers, sites, bindings and pools</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Download" Href="/export/access.csv" Target="_blank">Who has which role</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Download" Href="/export/audit.csv" Target="_blank">Audit log</MudButton>
+    </MudStack>
+</MudPaper>
 
 <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
     <MudDatePicker Label="From" @bind-Date="_from" />
@@ -60,6 +71,7 @@ else { <MudProgressLinear Indeterminate="true" /> }
     private IReadOnlyList<DirectToProdRow>? _direct;
     private IReadOnlyList<SelfApprovedRow>? _self;
     private string? _error;
+    private string DeploymentsCsv => $"/export/deployments.csv?from={_from:yyyy-MM-dd}&to={_to:yyyy-MM-dd}";
 
     protected override async Task OnInitializedAsync() { _actor = await Actors.GetAsync(); await Load(); }
 

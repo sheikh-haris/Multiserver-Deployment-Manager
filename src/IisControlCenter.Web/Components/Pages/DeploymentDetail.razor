@@ -26,6 +26,12 @@ else if (_d is not null)
         <RequestBadges Row="@(new RequestBadges.Info(r.IsDirectToProd, r.SelfApproved, r.Type))" />
     </MudStack>
 
+    @if (r.Type == RequestType.Deploy && r.EnvironmentName == "Staging" && r.Status == RequestStatus.Succeeded && _actor!.Access.CanOnProject(ProjectPermission.SubmitDeployment, _d.Project.Id, "Prod"))
+    {
+        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-3">
+            This package is on Staging. <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning" StartIcon="@Icons.Material.Filled.ArrowUpward" OnClick="@(() => Nav.NavigateTo($"/deployments/new?component={_d.Component.Id}&env=Prod&package={r.PackageId}"))">Promote to Production</MudButton>
+        </MudAlert>
+    }
     @if (_d.PartialBanner is not null) { <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-3">@_d.PartialBanner</MudAlert> }
     @if (r.IsDirectToProd)
     {

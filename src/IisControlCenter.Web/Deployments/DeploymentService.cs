@@ -47,6 +47,11 @@ public sealed record RequestDetail(
 public sealed record DeployChoice(Guid ProjectId, string ProjectName, Guid ComponentId, string ComponentName, string Environment, IReadOnlyList<DeployTargetChoice> Targets, bool RequiresStaging);
 public sealed record DeployTargetChoice(Guid TargetId, string ServerName, string SiteName, string AppPath, TargetStatus Status, bool AgentOnline);
 
+/// <summary>What is running in one environment now, according to the last successful deployment that was not rolled back.</summary>
+public sealed record VersionCell(Guid RequestId, string PackageName, string Sha256, DateTimeOffset At, string By, string? Source, bool IsDirectToProd, bool SelfApproved);
+public sealed record VersionRow(Guid ComponentId, string ComponentName, IReadOnlyDictionary<string, VersionCell?> Cells, IReadOnlyList<string> EnvironmentsWithTargets);
+public sealed record PromotableRow(RequestRow Request, string Sha256, Guid ComponentId, string? RunningInProd);
+
 public sealed record DirectToProdRow(string ProjectName, string ComponentName, string Month, Guid RequestId, string RequestedBy, string Reason, RequestStatus Status, DateTimeOffset At, string Approvers);
 public sealed record SelfApprovedRow(string ProjectName, string ComponentName, string EnvironmentName, Guid RequestId, string Person, DateTimeOffset At);
 
@@ -624,5 +629,80 @@ public sealed class DeploymentService(
         var comps = await db.Components.AsNoTracking().ToDictionaryAsync(c => c.Id);
         var projects = await db.Projects.AsNoTracking().ToDictionaryAsync(p => p.Id, p => p.Name);
         return rows.Select(a => { var r = reqs[a.RequestId]; var c = comps[r.ComponentId]; return new SelfApprovedRow(projects.GetValueOrDefault(c.ProjectId, "?"), c.Name, r.EnvironmentName, r.Id, a.ApproverName, a.DecidedAt); }).ToList();
+    }
+
+    // =========================== versions per environment and "ready to promote" ===========================
+
+    private static readonly string[] Envs = [EnvironmentNames.Dev, EnvironmentNames.Staging, EnvironmentNames.Prod];
+
+    /// <summary>For each component of the project: the version each environment runs now (null = nothing deployed through the portal).</summary>
+    public async Task<IReadOnlyList<VersionRow>> VersionsAsync(Actor actor, Guid projectId)
+    {
+        await using var db = await dbf.CreateDbContextAsync();
+        var comps = await db.Components.AsNoTracking().Where(c => c.ProjectId == projectId).OrderBy(c => c.Name).ToListAsync();
+        var rows = new List<VersionRow>();
+        foreach (var c in comps)
+        {
+            var targetEnvs = await db.DeploymentTargets.AsNoTracking().Where(t => t.ComponentId == c.Id).Select(t => t.EnvironmentName).Distinct().ToListAsync();
+            var cells = new Dictionary<string, VersionCell?>();
+            foreach (var env in Envs)
+            {
+                if (!Sees(actor, projectId, env)) { continue; }
+                cells[env] = await CurrentVersionAsync(db, c.Id, env);
+            }
+            rows.Add(new VersionRow(c.Id, c.Name, cells, targetEnvs));
+        }
+        return rows;
+    }
+
+    private static async Task<VersionCell?> CurrentVersionAsync(AppDbContext db, Guid componentId, string env)
+    {
+        var done = await db.DeploymentRequests.AsNoTracking()
+            .Where(r => r.ComponentId == componentId && r.EnvironmentName == env && r.Type == RequestType.Deploy && r.Status == RequestStatus.Succeeded)
+            .OrderByDescending(r => r.EndedAt).Take(20).ToListAsync();
+        foreach (var r in done)
+        {
+            var undone = await db.DeploymentRuns.AsNoTracking().AnyAsync(x => x.RequestId == r.Id && x.Status == RunStatus.RolledBack);
+            if (undone) continue;
+            var pkg = await db.Packages.AsNoTracking().FirstAsync(p => p.Id == r.PackageId);
+            return new VersionCell(r.Id, pkg.FileName, pkg.Sha256, r.EndedAt ?? r.RequestedAt, r.RequestedBy, r.SourceReference, r.IsDirectToProd, r.SelfApproved);
+        }
+        return null;
+    }
+
+    /// <summary>Packages that succeeded on Staging and are not in Production yet, for components that have a Production target. Only for people who can deploy to Production.</summary>
+    public async Task<IReadOnlyList<PromotableRow>> PromotableAsync(Actor actor)
+    {
+        await using var db = await dbf.CreateDbContextAsync();
+        var staging = await db.DeploymentRequests.AsNoTracking()
+            .Where(r => r.Type == RequestType.Deploy && r.EnvironmentName == EnvironmentNames.Staging && r.Status == RequestStatus.Succeeded)
+            .OrderByDescending(r => r.EndedAt).Take(100).ToListAsync();
+        var result = new List<PromotableRow>();
+        var seen = new HashSet<Guid>();
+        foreach (var r in staging)
+        {
+            if (!seen.Add(r.ComponentId)) continue;                                      // only the newest per component
+            var comp = await db.Components.AsNoTracking().FirstAsync(c => c.Id == r.ComponentId);
+            if (!actor.Access.CanOnProject(ProjectPermission.SubmitDeployment, comp.ProjectId, EnvironmentNames.Prod)) continue;
+            if (!await db.DeploymentTargets.AnyAsync(t => t.ComponentId == comp.Id && t.EnvironmentName == EnvironmentNames.Prod && t.Status == TargetStatus.Active)) continue;
+            var pkg = await db.Packages.AsNoTracking().FirstAsync(p => p.Id == r.PackageId);
+            if (pkg.DeletedAt is not null || pkg.ExpiresAt < clock.GetUtcNow() || !store.Exists(pkg)) continue;
+            var prod = await CurrentVersionAsync(db, comp.Id, EnvironmentNames.Prod);
+            if (prod is not null && prod.Sha256 == pkg.Sha256) continue;                // already there
+            var open = await db.DeploymentRequests.AnyAsync(x => x.ComponentId == comp.Id && x.EnvironmentName == EnvironmentNames.Prod && x.PackageId == pkg.Id
+                && (x.Status == RequestStatus.Submitted || x.Status == RequestStatus.Approved || x.Status == RequestStatus.Scheduled || x.Status == RequestStatus.Running));
+            if (open) continue;
+            var project = await db.Projects.AsNoTracking().FirstAsync(p => p.Id == comp.ProjectId);
+            var row = new RequestRow(r.Id, r.Type, r.Status, project.Name, project.Id, comp.Name, r.EnvironmentName, pkg.FileName, r.RequestedBy, r.RequestedAt, r.ExpiresAt, r.ScheduledAt,
+                r.IsDirectToProd, r.SelfApproved, r.ApprovalsRequired, 0, 0, r.SourceReference);
+            result.Add(new PromotableRow(row, pkg.Sha256, comp.Id, prod?.PackageName));
+        }
+        return result;
+    }
+
+    public async Task<Guid> PackageIdOfRequestAsync(Guid requestId)
+    {
+        await using var db = await dbf.CreateDbContextAsync();
+        return await db.DeploymentRequests.AsNoTracking().Where(r => r.Id == requestId).Select(r => r.PackageId).FirstAsync();
     }
 }

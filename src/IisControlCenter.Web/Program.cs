@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
+using System.Text;
 using System.Threading.RateLimiting;
 using Hangfire;
 using IisControlCenter.Contracts;
@@ -111,6 +112,7 @@ builder.Services.AddScoped<DiscoveryJob>();
 builder.Services.AddScoped<ReconciliationJob>();
 builder.Services.AddScoped<Reconciler>();
 builder.Services.AddScoped<ProjectService>();
+builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<IisOpsService>();
 builder.Services.AddScoped<PoolAdminService>();
 builder.Services.AddScoped<MembershipService>();
@@ -342,6 +344,30 @@ app.MapGet("/export/audit.csv", async (string? search, string? action, string? r
     }
     catch (ForbiddenException) { return Results.Forbid(); }
 }).RequireAuthorization(Policies.For(Permission.ViewAudit));
+
+static async Task<Actor> ExportActor(HttpContext ctx, AccessService access)
+{
+    var evaluator = await access.GetEvaluatorAsync(ctx.User);
+    var u = UserClaims.ToContext(ctx.User);
+    return new Actor(u.UserId, u.DisplayName, ctx.Connection.RemoteIpAddress?.ToString(), evaluator);
+}
+static IResult CsvFile(string csv, string name, TimeProvider clock) => Results.File(Encoding.UTF8.GetBytes(csv), "text/csv", $"{name}-{clock.GetUtcNow():yyyyMMdd-HHmm}.csv");
+
+app.MapGet("/export/deployments.csv", async (DateTime? from, DateTime? to, Guid? project, string? env, HttpContext ctx, AccessService access, ReportService reports, TimeProvider clock) =>
+{
+    var actor = await ExportActor(ctx, access);
+    var f = new DateTimeOffset(from?.Date ?? DateTime.UtcNow.Date.AddMonths(-3), TimeSpan.Zero);
+    var t = new DateTimeOffset((to?.Date ?? DateTime.UtcNow.Date).AddDays(1), TimeSpan.Zero);
+    return CsvFile(await reports.DeploymentHistoryCsvAsync(actor, f, t, project, env), "deployments", clock);
+});
+app.MapGet("/export/inventory.csv", async (HttpContext ctx, AccessService access, ReportService reports, TimeProvider clock) =>
+{
+    try { return CsvFile(await reports.InventoryCsvAsync(await ExportActor(ctx, access)), "inventory", clock); } catch (ForbiddenException) { return Results.Forbid(); }
+});
+app.MapGet("/export/access.csv", async (bool? revoked, HttpContext ctx, AccessService access, ReportService reports, TimeProvider clock) =>
+{
+    try { return CsvFile(await reports.AccessCsvAsync(await ExportActor(ctx, access), revoked == true), "access", clock); } catch (ForbiddenException) { return Results.Forbid(); }
+});
 
 // ---------- jobs ----------
 if (hangfireOn)
