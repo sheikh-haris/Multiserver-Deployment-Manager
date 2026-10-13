@@ -31,9 +31,10 @@ public sealed class DiffService(
 {
     private static readonly TimeSpan AgentTimeout = TimeSpan.FromSeconds(90);
 
-    public static ProtectedPaths ProtectedFor(IEnumerable<ProtectedPath> list) =>
+    /// <param name="nestedFolders">Folders of other IIS applications inside the target (see <see cref="NestedFolderQuery"/>). Protected like data folders.</param>
+    public static ProtectedPaths ProtectedFor(IEnumerable<ProtectedPath> list, IEnumerable<string>? nestedFolders = null) =>
         new(list.Where(p => p.Kind == ProtectedPathKind.ConfigFile).Select(p => p.Path),
-            list.Where(p => p.Kind == ProtectedPathKind.DataFolder).Select(p => p.Path));
+            list.Where(p => p.Kind == ProtectedPathKind.DataFolder).Select(p => p.Path).Concat(nestedFolders ?? []));
 
     public async Task<TargetDiff> ComputeAsync(
         Package pkg, Server server, DeploymentTarget target, DeployMode mode, ProtectedPaths prot, IReadOnlySet<string> forced, CancellationToken ct = default)

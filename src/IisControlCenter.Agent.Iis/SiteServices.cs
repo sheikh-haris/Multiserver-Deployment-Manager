@@ -5,7 +5,14 @@ using Microsoft.Web.Administration;
 namespace IisControlCenter.Agent.Iis;
 
 /// <summary>What the agent itself learns from IIS about one application. The agent never trusts the portal for these.</summary>
-public sealed record ResolvedApp(string PhysicalPath, string PoolName, IReadOnlyList<DiscoveredBinding> Bindings);
+public sealed record ResolvedApp(string PhysicalPath, string PoolName, IReadOnlyList<DiscoveredBinding> Bindings)
+{
+    /// <summary>
+    /// Folders of every OTHER application and virtual directory on this server (any site). The executor protects the ones inside the target folder:
+    /// an application in a sub-folder is deployed by its own request, never by its parent's.
+    /// </summary>
+    public IReadOnlyList<string> OtherIisFolders { get; init; } = [];
+}
 
 public interface ISiteResolver
 {
@@ -35,7 +42,16 @@ public sealed class IisSiteResolver : ISiteResolver
         if (root is null) return null;
         var bindings = site.Bindings.Select(b => new DiscoveredBinding(b.Protocol, b.EndPoint?.Address?.ToString(), b.EndPoint?.Port ?? 0,
             string.IsNullOrEmpty(b.Host) ? null : b.Host, null)).ToList();
-        return new ResolvedApp(Environment.ExpandEnvironmentVariables(root.PhysicalPath), app.ApplicationPoolName, bindings);
+        var others = new List<string>();
+        foreach (var st in mgr.Sites)
+            foreach (var a in st.Applications)
+                foreach (var v in a.VirtualDirectories)
+                {
+                    if (st.Id == site.Id && ReferenceEquals(a, app) && v.Path == "/") continue;          // the target's own root
+                    if (st.Id == site.Id && a.Path == app.Path && v.Path == "/") continue;
+                    if (!string.IsNullOrWhiteSpace(v.PhysicalPath)) others.Add(Environment.ExpandEnvironmentVariables(v.PhysicalPath));
+                }
+        return new ResolvedApp(Environment.ExpandEnvironmentVariables(root.PhysicalPath), app.ApplicationPoolName, bindings) { OtherIisFolders = others };
     }
 }
 

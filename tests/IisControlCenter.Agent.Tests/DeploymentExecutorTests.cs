@@ -126,6 +126,26 @@ public class DeploymentExecutorTests : IDisposable
     }
 
     [Fact]
+    public async Task An_application_in_a_sub_folder_is_left_alone_by_the_parents_deployment_even_with_full_replace_and_the_portal_saying_nothing()
+    {
+        BasicSite();
+        h.Live("api/bin/Api.dll", "CHILD APP v1"); h.Live("api/web.config", "child config");
+        h.Sites.OtherFolders.Add(Path.Combine(h.Target, "api"));
+        // The package even contains a file under api/. It must not be written. The portal's list does not mention api/ at all.
+        var zip = DeployHarness.Zip(("index.html", "v2"), ("api/bin/Api.dll", "WRONG PACKAGE"), ("bin/New.dll", "n"));
+        var r = await h.Deploy(h.Command(zip, DeployMode.FullReplace, dataFolders: ["uploads"]));
+        Assert.Equal(RunResults.Succeeded, r.Result);
+        Assert.Equal("CHILD APP v1", h.Read("api/bin/Api.dll"));
+        Assert.Equal("child config", h.Read("api/web.config"));
+        Assert.Equal("v2", h.Read("index.html"));
+        Assert.False(h.Exists("old-only.txt"));
+        // and it is not in the backup, so a rollback can never touch it either
+        var rb = await h.Executor.RollbackAsync(new RollbackCommand(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), h.Target, 1, "/", r.BackupId!, "/", 0, 5), new CollectingReporter(), default);
+        Assert.Equal(RunResults.Succeeded, rb.Result);
+        Assert.Equal("CHILD APP v1", h.Read("api/bin/Api.dll"));
+    }
+
+    [Fact]
     public async Task The_agent_remembers_protected_data_folders_so_the_portal_cannot_remove_them()
     {
         BasicSite();

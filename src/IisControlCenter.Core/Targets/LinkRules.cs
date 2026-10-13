@@ -29,11 +29,19 @@ public static class LinkRules
     public static string NormalizePath(string? p) =>
         (p ?? "").Trim().Replace('/', '\\').TrimEnd('\\').ToLowerInvariant();
 
+    /// <summary>Same folder, or one inside the other. Nesting alone is NOT a violation (see <see cref="SameFolder"/>); this is kept for display.</summary>
     public static bool PathsOverlap(string? a, string? b)
     {
         var x = NormalizePath(a); var y = NormalizePath(b);
         if (x.Length == 0 || y.Length == 0) return false;
         return x == y || x.StartsWith(y + "\\", StringComparison.Ordinal) || y.StartsWith(x + "\\", StringComparison.Ordinal);
+    }
+
+    /// <summary>Two different IIS items pointing at exactly the same folder cannot both be deployed to safely.</summary>
+    public static bool SameFolder(string? a, string? b)
+    {
+        var x = NormalizePath(a); var y = NormalizePath(b);
+        return x.Length > 0 && x == y;
     }
 
     public static string NormalizeAppPath(string? p)
@@ -79,10 +87,10 @@ public static class LinkRules
                     Exceptionable: true));
 
             if (!(e.IisSiteId == c.IisSiteId && string.Equals(NormalizeAppPath(e.AppPath), appPath, StringComparison.OrdinalIgnoreCase))
-                && PathsOverlap(e.PhysicalPath, c.PhysicalPath))
+                && SameFolder(e.PhysicalPath, c.PhysicalPath))
                 v.Add(new(LinkViolationCode.PathOverlap,
-                    $"The folder overlaps with the folder of {e.ProjectName} / {e.ComponentName} ({e.PhysicalPath}). " +
-                    "A deployment could overwrite or delete the other component's files.", false));
+                    $"Another item ({e.ProjectName} / {e.ComponentName}) already uses exactly this folder ({e.PhysicalPath}). " +
+                    "Two components cannot deploy into the same folder. (A sub-folder that belongs to another application is fine: it is protected automatically.)", false));
         }
         return v;
     }

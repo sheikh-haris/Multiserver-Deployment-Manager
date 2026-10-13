@@ -80,7 +80,9 @@ public sealed class DeploymentExecutor(
             // ---- Validate: the agent decides what is allowed, not the portal ----
             app = await Step(Steps.Validate, () => Task.FromResult(ValidateTarget(cmd.PhysicalPath, cmd.IisSiteId, cmd.AppPath, Log)));
             target = Path.GetFullPath(cmd.PhysicalPath);
-            pp = protectedStore.Merge(target, cmd.ProtectedData, cmd.ProtectedConfig);
+            var nested = NestedFolders.RelativeInside(target, app.OtherIisFolders);
+            pp = protectedStore.Merge(target, cmd.ProtectedData.Concat(nested), cmd.ProtectedConfig);
+            if (nested.Count > 0) Log("Info", Steps.Validate, $"Other IIS applications or virtual directories live inside this folder and are left alone: {string.Join(", ", nested)}");
             entry.DataFolders = [.. pp.DataFolders]; entry.ConfigPatterns = [.. pp.ConfigPatterns];
             if (cmd.PackageSize <= 0 || string.IsNullOrWhiteSpace(cmd.PackageSha256)) throw new StepFailedException(Steps.Validate, "The command has no package size or hash.");
             Log("Info", Steps.Validate, $"Target {target}, app pool '{app.PoolName}', mode {cmd.Mode}.");
@@ -200,7 +202,7 @@ public sealed class DeploymentExecutor(
             var bk = backups.Find(cmd.BackupId) ?? throw new StepFailedException(Steps.Validate, "This agent has no such backup. It may have been removed to save space.");
             if (!string.Equals(bk.TargetPath.TrimEnd('\\', '/'), target.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
                 throw new StepFailedException(Steps.Validate, "That backup belongs to a different folder.");
-            var pp = protectedStore.Load(target);
+            var pp = protectedStore.Merge(target, NestedFolders.RelativeInside(target, app.OtherIisFolders), []);
             rep.Step(runId, Steps.Validate, "Done");
 
             var entry = new JournalEntry

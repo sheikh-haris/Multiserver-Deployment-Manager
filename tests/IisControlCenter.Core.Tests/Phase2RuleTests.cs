@@ -66,10 +66,17 @@ public class LinkRulesTests
     public void Folder_overlap(string a, string b, bool overlap) => Assert.Equal(overlap, LinkRules.PathsOverlap(a, b));
 
     [Fact]
-    public void Overlapping_folders_are_blocked_and_cannot_be_waived()
+    public void The_same_folder_twice_is_blocked_and_cannot_be_waived()
     {
-        var v = LinkRules.Check(Cand(path: @"D:\Websites\billing"), [Ex(path: @"D:\Websites\billing\web")]);
+        var v = LinkRules.Check(Cand(path: @"D:\Websites\billing"), [Ex(path: @"D:\WEBSITES\billing\")]);
         Assert.Contains(v, x => x.Code == LinkViolationCode.PathOverlap && !x.Exceptionable);
+    }
+
+    [Fact]
+    public void A_sub_application_in_a_sub_folder_of_its_site_is_normal_and_allowed()
+    {
+        Assert.DoesNotContain(LinkViolationCode.PathOverlap, Codes(Cand(path: @"D:\Websites\billing\api"), Ex(path: @"D:\Websites\billing")));
+        Assert.DoesNotContain(LinkViolationCode.PathOverlap, Codes(Cand(path: @"D:\Websites\billing"), Ex(path: @"D:\Websites\billing\api")));
     }
 
     [Fact]

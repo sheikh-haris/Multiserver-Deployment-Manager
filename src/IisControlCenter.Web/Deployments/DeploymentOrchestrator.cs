@@ -139,7 +139,7 @@ public sealed class DeploymentOrchestrator(
         if (req.Type == RequestType.Deploy)
         {
             var pkg = await db.Packages.AsNoTracking().FirstAsync(p => p.Id == req.PackageId, ct);
-            var prot = DiffService.ProtectedFor(comp.ProtectedPaths);
+            var prot = DiffService.ProtectedFor(comp.ProtectedPaths, await NestedFolderQuery.ForAsync(db, target));
             var forced = await db.ForcedFiles.AsNoTracking().Where(f => f.RequestId == req.Id).Select(f => f.Path).ToListAsync(ct);
             var cmd = new DeployCommand(run.Id, req.Id, target.Id, target.PhysicalPath, target.IisSiteId, target.AppPath, pkg.Id, pkg.Sha256, pkg.Size, (DeployMode)req.Mode,
                 prot.ConfigPatterns, prot.DataFolders, forced, O.BackupsToKeep, comp.HealthCheckPath, 0, O.HealthTimeoutSeconds,

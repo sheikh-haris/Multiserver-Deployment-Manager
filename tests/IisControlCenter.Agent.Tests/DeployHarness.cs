@@ -14,7 +14,9 @@ public sealed class FakeSites(string path, string pool = "AppPool1") : ISiteReso
 {
     public string Path { get; set; } = path;
     public bool Exists { get; set; } = true;
-    public ResolvedApp? Resolve(long iisSiteId, string appPath) => Exists ? new ResolvedApp(Path, pool, [new DiscoveredBinding("http", "*", 8080, "site.local", null)]) : null;
+    /// <summary>Folders of other IIS applications / virtual directories on the server.</summary>
+    public List<string> OtherFolders { get; } = [];
+    public ResolvedApp? Resolve(long iisSiteId, string appPath) => Exists ? new ResolvedApp(Path, pool, [new DiscoveredBinding("http", "*", 8080, "site.local", null)]) { OtherIisFolders = OtherFolders } : null;
 }
 
 public sealed class FakePools : IPoolController

@@ -22,7 +22,8 @@ public sealed class SampleSiteResolver : ISiteResolver
     {
         var s = SampleSites.Load()?.FirstOrDefault(x => x.Id == iisSiteId);
         if (s is null || (appPath is not "/" and not "")) return null;
-        return new ResolvedApp(s.Path, s.Pool, [new DiscoveredBinding("http", "*", s.Port, s.Host, null)]);
+        var others = SampleSites.Load()!.Where(x => x.Id != iisSiteId).Select(x => x.Path).ToList();
+        return new ResolvedApp(s.Path, s.Pool, [new DiscoveredBinding("http", "*", s.Port, s.Host, null)]) { OtherIisFolders = others };
     }
 }
 

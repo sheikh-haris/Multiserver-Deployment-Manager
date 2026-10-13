@@ -108,7 +108,7 @@ public sealed class DeploymentService(
         var prot = DiffService.ProtectedFor(comp.ProtectedPaths);
         var forced = cmd.ForcedFiles.Select(f => f.Path).ToHashSet(RelativePaths.Comparer);
         var diffs = new List<TargetDiff>();
-        foreach (var t in targets) diffs.Add(await diff.ComputeAsync(pkg, servers[t.ServerId], t, cmd.Mode, prot, forced, ct));
+        foreach (var t in targets) diffs.Add(await diff.ComputeAsync(pkg, servers[t.ServerId], t, cmd.Mode, DiffService.ProtectedFor(comp.ProtectedPaths, await NestedFolderQuery.ForAsync(db, t)), forced, ct));
 
         var isProd = cmd.Environment == EnvironmentNames.Prod;
         var (proof, from) = isProd ? await StagingProofAsync(db, comp, pkg) : (false, null);
@@ -156,7 +156,7 @@ public sealed class DeploymentService(
         var diffs = new List<TargetDiff>();
         foreach (var t in targets)
         {
-            var d = await diff.ComputeAsync(pkg, servers[t.ServerId], t, cmd.Mode, prot, forcedSet, ct);
+            var d = await diff.ComputeAsync(pkg, servers[t.ServerId], t, cmd.Mode, DiffService.ProtectedFor(comp.ProtectedPaths, await NestedFolderQuery.ForAsync(db, t)), forcedSet, ct);
             if (!d.Ok) return OpResult<Guid>.Fail($"Could not read {d.ServerName}: {d.Error}");
             diffs.Add(d);
         }

@@ -68,6 +68,25 @@ public class OrchestratorTests : IDisposable
         Assert.True(d.E.Hub.Client.Deploys.Single().Command.ScanOnAgent);
     }
 
+    // ---------------- sub-applications in sub-folders ----------------
+
+    [Fact]
+    public async Task A_sub_application_inside_the_targets_folder_is_protected_in_the_review_and_in_the_command()
+    {
+        var (dep, appr, pkg0) = await Ready();
+        await d.E.Store(d.ServerId, new TestEnv.SiteSpec(11, "WEB01-site", @"D:\Websites\WEB01", "WEB01Pool", ("/api", @"D:\Websites\WEB01\api", "ApiPool")));
+        d.Live["api/Api.dll"] = "child"; d.Live["old.txt"] = "x";
+        d.E.Hub.Client.Deploys.Clear();
+        var zip = await d.Upload(dep, "Dev", [("index.html", "v2"), ("api/Api.dll", "WRONG")], "b3.zip");
+        await d.Protected.ConfirmAsync(d.E.Admin, d.ComponentId);
+        var id = await d.SubmitApprovedAndRun(dep, appr, zip, "Dev", d.Cmd(zip, "Dev", mode: DeployMode.FullReplace));
+
+        var changes = d.Store.ReadChanges(id, d.TargetId);
+        Assert.Contains(changes, c => c.Path == "api/Api.dll" && c.Action == FileAction.SkipProtectedData);
+        Assert.DoesNotContain(changes, c => c.Action == FileAction.Delete && c.Path.StartsWith("api/"));
+        Assert.Contains(d.E.Hub.Client.Deploys.Single().Command.ProtectedData, f => f.TrimEnd('/', '\\') == "api");
+    }
+
     // ---------------- failures ----------------
 
     [Fact]
