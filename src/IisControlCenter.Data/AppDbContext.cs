@@ -42,6 +42,7 @@ public class AppDbContext : DbContext
     public DbSet<ProtectedListConfirmation> ProtectedListConfirmations => Set<ProtectedListConfirmation>();
     public DbSet<PoolChangeRequest> PoolChangeRequests => Set<PoolChangeRequest>();
     public DbSet<IisCreatedItem> IisCreatedItems => Set<IisCreatedItem>();
+    public DbSet<SiteTemplate> SiteTemplates => Set<SiteTemplate>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -426,6 +427,15 @@ public class AppDbContext : DbContext
             e.Property(x => x.ResultMessage).HasMaxLength(2000);
             e.Property(x => x.Summary).HasMaxLength(500);
             e.HasIndex(x => new { x.Status, x.ServerId });
+        });
+        b.Entity<SiteTemplate>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(100);
+            e.Property(x => x.Description).HasMaxLength(1000);
+            e.Property(x => x.CreatedBy).HasMaxLength(300);
+            e.Property(x => x.UpdatedBy).HasMaxLength(300);
+            e.HasIndex(x => x.Name).IsUnique();
         });
         b.Entity<IisCreatedItem>(e =>
         {

@@ -113,6 +113,7 @@ builder.Services.AddScoped<ReconciliationJob>();
 builder.Services.AddScoped<Reconciler>();
 builder.Services.AddScoped<ProjectService>();
 builder.Services.AddScoped<ReportService>();
+builder.Services.AddScoped<SiteTemplateService>();
 builder.Services.AddScoped<IisOpsService>();
 builder.Services.AddScoped<PoolAdminService>();
 builder.Services.AddScoped<MembershipService>();

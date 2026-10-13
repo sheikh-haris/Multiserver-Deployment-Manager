@@ -245,3 +245,16 @@ public class IisCreatedItem
     public string CreatedById { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; }
 }
+
+/// <summary>A reusable site layout (see <c>SiteTemplateDef</c>). Stored as JSON; contains no secrets.</summary>
+public class SiteTemplate
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public string Json { get; set; } = "{}";
+    public string CreatedBy { get; set; } = "";
+    public DateTimeOffset CreatedAt { get; set; }
+    public string? UpdatedBy { get; set; }
+    public DateTimeOffset? UpdatedAt { get; set; }
+}

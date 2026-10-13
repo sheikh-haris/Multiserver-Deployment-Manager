@@ -43,9 +43,10 @@ public sealed class IisOpsService(
     }
 
     /// <summary>Cheap checks on the shape of the request. The agent repeats all of them and also checks what exists in IIS.</summary>
-    public static string? Validate(IisOpCommand c)
+    public static string? Validate(IisOpCommand c, bool allowNewSiteMarker = false)
     {
         var e = new List<string>();
+        bool BadSite() => c.SiteId <= 0 && !(allowNewSiteMarker && c.SiteId == IisOpCommand.NewSiteMarker);
         switch (c.Op)
         {
             case IisOp.CreatePool:
@@ -59,20 +60,20 @@ public sealed class IisOpsService(
                 if (string.IsNullOrWhiteSpace(c.PhysicalPath)) e.Add("Enter the folder.");
                 break;
             case IisOp.StartSite or IisOp.StopSite:
-                if (c.SiteId <= 0) e.Add("Choose a site.");
+                if (BadSite()) e.Add("Choose a site.");
                 break;
             case IisOp.UpdateBindings:
-                if (c.SiteId <= 0) e.Add("Choose a site.");
+                if (BadSite()) e.Add("Choose a site.");
                 e.AddRange(IisRules.ValidateBindings(c.Bindings));
                 break;
             case IisOp.CreateApplication:
-                if (c.SiteId <= 0) e.Add("Choose a site.");
+                if (BadSite()) e.Add("Choose a site.");
                 if (IisRules.ValidateVirtualPath(IisRules.NormalizeVirtualPath(c.AppPath ?? ""), "application") is { } p) e.Add(p);
                 if (string.IsNullOrWhiteSpace(c.PoolName)) e.Add("Choose an app pool.");
                 if (string.IsNullOrWhiteSpace(c.PhysicalPath)) e.Add("Enter the folder.");
                 break;
             case IisOp.CreateVirtualDirectory:
-                if (c.SiteId <= 0) e.Add("Choose a site.");
+                if (BadSite()) e.Add("Choose a site.");
                 if (IisRules.ValidateVirtualPath(IisRules.NormalizeVirtualPath(c.VirtualPath ?? ""), "virtual directory") is { } v) e.Add(v);
                 if (string.IsNullOrWhiteSpace(c.PhysicalPath)) e.Add("Enter the folder.");
                 break;
@@ -97,12 +98,14 @@ public sealed class IisOpsService(
         IisOp.StartSite => $"Start site #{c.SiteId}",
         IisOp.StopSite => $"Stop site #{c.SiteId}",
         IisOp.UpdateBindings => $"Set bindings of site #{c.SiteId} to {string.Join(", ", (c.Bindings ?? []).Select(b => $"{b.Host}:{b.Port}"))}",
-        IisOp.CreateApplication => $"Create application {c.AppPath} on site #{c.SiteId} → {c.PhysicalPath}, pool {c.PoolName}",
-        IisOp.CreateVirtualDirectory => $"Create virtual directory {c.VirtualPath} on site #{c.SiteId} → {c.PhysicalPath}",
+        IisOp.CreateApplication => $"Create application {c.AppPath} on {SiteLabel(c.SiteId)} → {c.PhysicalPath}, pool {c.PoolName}",
+        IisOp.CreateVirtualDirectory => $"Create virtual directory {c.VirtualPath} on {SiteLabel(c.SiteId)} → {c.PhysicalPath}",
         IisOp.CreateFolder => $"Create folder {c.PhysicalPath}",
         IisOp.GrantFolderAccess => $"Give IIS AppPool\\{c.PoolName} {c.Access} access to {c.PhysicalPath}",
         _ => c.Op.ToString(),
     };
+
+    private static string SiteLabel(long id) => id == IisOpCommand.NewSiteMarker ? "the new site" : $"site #{id}";
 
     private static bool Inside(string? path, string? parent)
     {
@@ -219,11 +222,100 @@ public sealed class IisOpsService(
         return await ExecuteAsync(db, actor, server, command, auth.ProjectId, reason, ct);
     }
 
+    // ======================= batches (templates) =======================
+
+    public sealed record BatchStep(string Description, bool Ok, string? Message);
+    public sealed record BatchOutcome(bool Ok, string? Error, bool Queued, Guid? RequestId, IReadOnlyList<BatchStep> Steps);
+
+    /// <summary>
+    /// Several operations as one unit, for example "apply a site template". Everything is validated first.
+    /// Outside Production the steps run in order and stop at the first failure (nothing is undone: there is no delete).
+    /// In Production the whole list is ONE request: a second person sees every step and approves them together.
+    /// </summary>
+    public async Task<BatchOutcome> RunBatchAsync(Actor actor, Guid serverId, IReadOnlyList<IisOpCommand> commands0, Guid? projectId, string? reason, string summary, CancellationToken ct = default)
+    {
+        BatchOutcome Fail(string e) => new(false, e, false, null, []);
+        if (commands0.Count == 0) return Fail("Nothing to do.");
+        var seenSite = false;
+        foreach (var c in commands0)
+        {
+            if (c.SiteId == IisOpCommand.NewSiteMarker && !seenSite) return Fail("Internal error: a step refers to a site that is not created yet.");
+            if (Validate(c, allowNewSiteMarker: true) is { } bad) return Fail($"{Describe(c)}: {bad}");
+            if (c.Op == IisOp.CreateSite) seenSite = true;
+        }
+        await using var db = await dbf.CreateDbContextAsync(ct);
+        var server = await db.Servers.AsNoTracking().FirstOrDefaultAsync(s => s.Id == serverId && !s.IsDeleted, ct);
+        if (server is null) return Fail("Server not found.");
+        if (WhyNot(server, commands.IsConnected(serverId)) is { } why) return Fail(why);
+
+        var isOperator = actor.Can(Permission.ManageIis, server.EnvironmentName);
+        var hasModify = commands0.Any(c => c.Op == IisOp.GrantFolderAccess && c.Access == FolderAccess.Modify);
+        if (hasModify && string.IsNullOrWhiteSpace(reason)) return Fail("This includes Modify access. Write the reason.");
+        if (!isOperator)
+        {
+            // Owner path: the same checks as single operations, plus the whole batch is refused up front if any step could not be allowed
+            if (projectId is not { } pid || !actor.Access.IsProjectOwner(pid) || server.EnvironmentName == EnvironmentNames.Prod)
+            {
+                await audit.WriteAsync(actor, new AuditRecord("Iis.Batch", "IisObject", null, serverId, server.EnvironmentName, Result: "Denied", Detail: summary));
+                throw new ForbiddenException("You need the Server Operator role for this environment, or Platform Admin. (Project Owners can do this for their own project in Dev and Staging.)");
+            }
+            if (hasModify) return Fail("Only a Server Operator or Platform Admin can grant Modify. This template includes Modify access.");
+        }
+
+        if (isOperator && server.EnvironmentName == EnvironmentNames.Prod)
+        {
+            if (string.IsNullOrWhiteSpace(reason)) return Fail("Production changes need a written reason: a second person approves them.");
+            var now = clock.GetUtcNow();
+            var req = new PoolChangeRequest
+            {
+                Id = Guid.NewGuid(), ServerId = serverId, EnvironmentName = server.EnvironmentName!, Kind = PoolRequestKind.Iis, PoolsJson = "[]",
+                PayloadJson = JsonSerializer.Serialize(commands0, Json), Summary = $"{summary} ({commands0.Count} steps: {string.Join("; ", commands0.Select(Describe))})", Reason = reason.Trim(),
+                RequestedBy = actor.UserName, RequestedById = actor.UserId, RequestedAt = now, ExpiresAt = now + PoolAdminService.RequestLifetime, ProjectId = projectId,
+            };
+            if (req.Summary.Length > 500) req.Summary = req.Summary[..497] + "…";
+            db.PoolChangeRequests.Add(req);
+            await db.SaveChangesAsync(ct);
+            await audit.WriteAsync(actor, new AuditRecord("Pool.Request", "PoolChangeRequest", req.Id.ToString(), serverId, server.EnvironmentName, After: string.Join(" | ", commands0.Select(Describe)), Detail: reason.Trim()));
+            bus.Publish(new ServerChanged(serverId, ServerChangeKind.Status));
+            return new(true, null, true, req.Id, []);
+        }
+
+        var steps = new List<BatchStep>();
+        long? createdSite = null;
+        foreach (var c0 in commands0)
+        {
+            var c = c0.SiteId == IisOpCommand.NewSiteMarker ? c0 with { SiteId = createdSite ?? 0 } : c0;
+            var o = await RunAsync(actor, serverId, c, projectId, reason, ct);
+            steps.Add(new BatchStep(Describe(c0), o.Ok, o.Error ?? o.Result?.After));
+            if (!o.Ok) return new(false, $"Stopped at: {Describe(c0)}. {o.Error} Earlier steps were done and are not undone.", false, null, steps);
+            if (c.Op == IisOp.CreateSite) createdSite = o.Result?.SiteId;
+        }
+        await audit.WriteAsync(actor, new AuditRecord("Iis.Batch", "IisObject", null, serverId, server.EnvironmentName, After: $"{summary}: {steps.Count} steps done"));
+        return new(true, null, false, null, steps);
+    }
+
+    /// <summary>Runs an approved batch in order. Authorization happened when it was requested; the approver is on the audit lines.</summary>
+    private async Task<IisOutcome> ExecuteApprovedBatchAsync(AppDbContext db, Actor approver, Server server, PoolChangeRequest req, CancellationToken ct)
+    {
+        var cmds = JsonSerializer.Deserialize<List<IisOpCommand>>(req.PayloadJson!)!;
+        long? createdSite = null; var done = new List<string>();
+        foreach (var c0 in cmds)
+        {
+            var c = c0.SiteId == IisOpCommand.NewSiteMarker ? c0 with { SiteId = createdSite ?? 0 } : c0;
+            var o = await ExecuteAsync(db, approver, server, c, req.ProjectId, $"Approved by {approver.UserName}; requested by {req.RequestedBy}: {req.Reason}", ct);
+            if (!o.Ok) return new(false, $"Step {done.Count + 1} of {cmds.Count} failed ({Describe(c0)}): {o.Error}. {done.Count} step(s) were done before it and are not undone.", false, null, o.Result);
+            done.Add(Describe(c0));
+            if (c.Op == IisOp.CreateSite) createdSite = o.Result?.SiteId;
+        }
+        return new(true, null, false, null, new IisOpResult(Guid.Empty, true, null, null, $"{done.Count} steps done", true, createdSite));
+    }
+
     internal static string AuditAction(IisOpCommand c) => c.Op == IisOp.GrantFolderAccess && c.Access == FolderAccess.Modify ? "Iis.GrantFolderAccess.Modify" : "Iis." + c.Op;
 
     /// <summary>Runs a request a second person approved. The approver's name goes on the audit line.</summary>
     internal async Task<IisOutcome> ExecuteApprovedAsync(AppDbContext db, Actor approver, Server server, PoolChangeRequest req, CancellationToken ct)
     {
+        if (req.PayloadJson!.TrimStart().StartsWith('[')) return await ExecuteApprovedBatchAsync(db, approver, server, req, ct);
         var cmd = JsonSerializer.Deserialize<IisOpCommand>(req.PayloadJson!)!;
         return await ExecuteAsync(db, approver, server, cmd, req.ProjectId, $"Approved by {approver.UserName}; requested by {req.RequestedBy}: {req.Reason}", ct);
     }

@@ -26,6 +26,9 @@ public enum FolderAccess { Read, ReadExecute, Modify }
 /// </summary>
 public sealed record IisOpCommand
 {
+    /// <summary>In a batch (template), SiteId = -1 means "the site created by an earlier step". The portal replaces it before sending; the agent never sees it.</summary>
+    public const long NewSiteMarker = -1;
+
     public IisOp Op { get; init; }
     public string? PoolName { get; init; }
     public PoolConfig? PoolConfig { get; init; }
