@@ -1,0 +1,69 @@
+@using IisControlCenter.Contracts
+@using IisControlCenter.Web.Services
+<MudDialog>
+    <DialogContent>
+        <MudGrid>
+            <MudItem xs="12"><MudSelect T="Guid" @bind-Value="_templateId" Label="Template">@foreach (var t in Templates) { <MudSelectItem T="Guid" Value="@t.Id">@t.Name</MudSelectItem> }</MudSelect></MudItem>
+            @if (Selected is { } sel)
+            {
+                <MudItem xs="12"><MudText Typo="Typo.caption">@Summary(sel.Def)</MudText></MudItem>
+            }
+            <MudItem xs="12" md="6"><MudTextField T="string" @bind-Value="_siteName" Label="Site name" Immediate="true" /></MudItem>
+            <MudItem xs="12" md="6"><MudTextField T="string" @bind-Value="_pool" Label="New app pool name" Immediate="true" /></MudItem>
+            <MudItem xs="12"><MudTextField T="string" @bind-Value="_folder" Label="Site folder on the server (must be new for Project Owners)" Placeholder="@FolderHint" Immediate="true" /></MudItem>
+            <MudItem xs="12">
+                <MudText Typo="Typo.subtitle2">HTTP bindings</MudText>
+                <MudStack Row="true" AlignItems="AlignItems.Center">
+                    <MudTextField T="string" @bind-Value="_host" Label="Host name" Placeholder="app.example.local" Immediate="true" Style="min-width:260px" />
+                    <MudTextField T="string" @bind-Value="_port" Label="Port" Immediate="true" Style="max-width:100px" />
+                </MudStack>
+            </MudItem>
+            @if (NeedReason || NeedsApproval)
+            {
+                <MudItem xs="12"><MudTextField T="string" @bind-Value="_reason" Label="@(NeedsApproval ? "Reason (a second person approves this)" : "Reason")" Lines="2" Immediate="true" /></MudItem>
+            }
+        </MudGrid>
+        <MudText Typo="Typo.caption" Class="d-block mt-2">The site is created <b>stopped</b>. If a step fails, the later steps are skipped and the earlier ones are not undone (there is no delete).</MudText>
+        @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mt-2" Dense="true">@_error</MudAlert> }
+        @if (NeedsApproval) { <MudAlert Severity="Severity.Warning" Class="mt-2" Dense="true">Production: all steps are sent as ONE request to a second Server Operator or Platform Admin.</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">@(NeedsApproval ? "Send for approval" : "Create site")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public IReadOnlyList<SiteTemplateRow> Templates { get; set; } = [];
+    [Parameter] public bool NeedsApproval { get; set; }
+    [Parameter] public string? FolderHint { get; set; }
+
+    public sealed record Result(Guid TemplateId, TemplateApply Input, string? Reason);
+
+    private Guid _templateId;
+    private string _siteName = "", _pool = "", _folder = "", _host = "", _port = "80", _reason = "";
+    private string? _error;
+    private SiteTemplateRow? Selected => Templates.FirstOrDefault(t => t.Id == _templateId);
+    private bool NeedReason => Selected?.Def.HasModify == true;
+
+    protected override void OnInitialized() { if (Templates.Count > 0) _templateId = Templates[0].Id; }
+
+    private static string Summary(SiteTemplateDef d) =>
+        $"Creates a pool and a site" + (d.Folders.Count > 0 ? $", {d.Folders.Count} folder(s)" : "") + (d.Apps.Count > 0 ? $", {d.Apps.Count} application(s)" : "") +
+        (d.VirtualDirectories.Count > 0 ? $", {d.VirtualDirectories.Count} virtual director{(d.VirtualDirectories.Count == 1 ? "y" : "ies")}" : "") + (d.Access.Count > 0 ? $", {d.Access.Count} folder access rule(s)" : "") + (d.HasModify ? " (includes Modify access)" : "") + ".";
+
+    private void Save()
+    {
+        _error = null;
+        if (Selected is null) { _error = "Choose a template."; return; }
+        if (!int.TryParse(_port, out var port)) { _error = $"'{_port}' is not a port number."; return; }
+        var input = new TemplateApply(_siteName.Trim(), _folder.Trim(), _pool.Trim(), [new HttpBinding(_host.Trim(), port)]);
+        if (IisRules.ValidateSiteName(input.SiteName) is { } a) { _error = a; return; }
+        if (PoolRules.ValidateName(input.PoolName) is { } b) { _error = b; return; }
+        if (IisRules.ValidateBindings(input.Bindings) is { Count: > 0 } c) { _error = string.Join(" ", c); return; }
+        if (input.RootFolder.Length == 0) { _error = "Enter the folder."; return; }
+        if ((NeedReason || NeedsApproval) && string.IsNullOrWhiteSpace(_reason)) { _error = "Write the reason."; return; }
+        Dialog.Close(DialogResult.Ok(new Result(_templateId, input, string.IsNullOrWhiteSpace(_reason) ? null : _reason.Trim())));
+    }
+}

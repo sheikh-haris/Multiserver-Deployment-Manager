@@ -11,6 +11,9 @@
     <AuthorizeView Policy="@Policies.For(Permission.ViewDiscoveryReport)">
         <MudNavLink Href="/reports/discovery" Icon="@Icons.Material.Filled.FactCheck">Discovery report</MudNavLink>
     </AuthorizeView>
+    <AuthorizeView Policy="@Policies.For(Permission.ManageIis)">
+        <MudNavLink Href="/templates" Icon="@Icons.Material.Filled.ContentCopy">Site templates</MudNavLink>
+    </AuthorizeView>
     <MudNavLink Href="/my-access" Icon="@Icons.Material.Filled.Badge">My access</MudNavLink>
     <AuthorizeView Policy="@Policies.For(Permission.ViewAudit)">
         <MudNavLink Href="/reports/deployments" Icon="@Icons.Material.Filled.Assessment">Reports</MudNavLink>

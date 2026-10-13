@@ -156,7 +156,7 @@ must(await appr.getByRole('button', { name: /Recycle pool/ }).count() === 0, 'an
 
 // ---------- 6b. IIS management: an operator creates a site; a project Owner creates their own ----------
 await op.goto(`${PORTAL}/servers/${SID}/iis`); await op.waitForLoadState('networkidle');
-await op.getByRole('button', { name: 'Create site' }).click();
+await op.getByRole('button', { name: 'Create site', exact: true }).click();
 const dlg = op.locator('.mud-dialog-container');
 await dlg.getByLabel('Site name').fill('blog');
 await dlg.getByLabel('Folder on the server').fill(`${W}/websites/blog`);
@@ -191,6 +191,30 @@ await own.locator('.mud-dialog-container').getByRole('button', { name: 'Do it' }
 await own.getByText(/App pool created/).waitFor({ timeout: 30000 });
 await shot(own, '13-owner-iis');
 must(true, 'a project Owner creates an app pool for their project');
+
+// ---------- 6c. site templates: make one, then create a site from it ----------
+await op.goto(`${PORTAL}/templates`); await op.waitForLoadState('networkidle');
+await op.getByRole('button', { name: 'New template' }).click();
+const td = op.locator('.mud-dialog-container');
+await td.getByLabel('Template name').fill('Web with api');
+await td.getByLabel('Extra folders').fill('logs');
+await td.getByLabel('Applications: path = folder').fill('/api = api');
+await td.getByLabel(/Folder access/).fill('. = ReadExecute');
+await td.getByRole('button', { name: 'Save' }).click();
+await op.getByText('Template saved.').waitFor({ timeout: 30000 });
+await shot(op, '14-templates');
+await op.goto(`${PORTAL}/servers/${SID}/iis`); await op.waitForLoadState('networkidle');
+await op.getByRole('button', { name: /Create site from template/ }).click();
+const ad = op.locator('.mud-dialog-container');
+await ad.getByLabel('Site name').fill('shop2');
+await ad.getByLabel('New app pool name').fill('shop2pool');
+await ad.getByLabel(/Site folder on the server/).fill(`${W}/websites/shop2`);
+await ad.getByLabel('Host name').fill('shop2.test');
+await ad.getByLabel('Port').fill('8091');
+await ad.getByRole('button', { name: 'Create site', exact: true }).click();
+await op.getByText(/Site shop2 created \(stopped\) with 5 steps/).waitFor({ timeout: 60000 });
+must(fs.existsSync(`${W}/websites/shop2/logs`) && fs.existsSync(`${W}/websites/shop2/api`), 'the template created the site folder, the extra folder and the application folder');
+await shot(op, '15-site-from-template');
 
 // ---------- 7. pages that must load ----------
 for (const p of ['/deployments', '/', `/projects/${PID}`, '/reports/deployments', '/pools/requests', `/servers/${SID}/pools`]) {

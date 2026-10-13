@@ -1,0 +1,112 @@
+@page "/templates"
+@attribute [Authorize]
+@inject ActorProvider Actors
+@inject SiteTemplateService Templates
+@inject IDialogService Dialogs
+<PageTitle>Site templates</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-1">Site templates</MudText>
+<MudText Typo="Typo.body2" Class="mb-3">A template is a reusable layout: pool settings, folders, applications, virtual directories and folder access. Apply it on a server's IIS page. Every step still goes through the normal checks, audit and (in Production) the second-person approval.</MudText>
+@if (_msg is not null) { <MudAlert Severity="@(_ok ? Severity.Success : Severity.Error)" Class="mb-3" ShowCloseIcon="true" CloseIconClicked="@(() => _msg = null)"><div style="white-space:pre-wrap">@_msg</div></MudAlert> }
+
+@if (_actor is null) { <MudProgressLinear Indeterminate="true" /> }
+else
+{
+    @if (CanManage)
+    {
+        <MudStack Row="true" Class="mb-3" Spacing="2" Wrap="Wrap.Wrap">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="New">New template</MudButton>
+            <MudSelect T="Guid" @bind-Value="_server" Label="Capture from a site: server" Dense="true" Style="min-width:260px" Variant="Variant.Outlined">
+                @foreach (var s in _servers) { <MudSelectItem T="Guid" Value="@s.Id">@s.Name</MudSelectItem> }
+            </MudSelect>
+            <MudSelect T="long" @bind-Value="_site" Label="Site" Dense="true" Style="min-width:220px" Variant="Variant.Outlined">
+                @foreach (var s in _sites) { <MudSelectItem T="long" Value="@s.IisSiteId">@s.Name</MudSelectItem> }
+            </MudSelect>
+            <MudButton Variant="Variant.Outlined" Disabled="@(_site == 0)" OnClick="Capture">Capture as template</MudButton>
+        </MudStack>
+    }
+    <MudSimpleTable Dense="true" Hover="true">
+        <thead><tr><th>Name</th><th>What it makes</th><th>By</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var t in _list)
+        {
+            var row = t;
+            <tr>
+                <td><b>@row.Name</b>@if (row.Description is not null) { <div class="mud-typography-caption">@row.Description</div> }</td>
+                <td>
+                    <div class="mono">pool@(row.Def.Pool is not null ? " (with settings)" : "")</div>
+                    @foreach (var f in row.Def.Folders) { <div class="mono">folder  @f</div> }
+                    @foreach (var a in row.Def.Apps) { <div class="mono">app  @a.Path → @a.Folder</div> }
+                    @foreach (var v in row.Def.VirtualDirectories) { <div class="mono">vdir  @v.Path → @v.Folder</div> }
+                    @foreach (var a in row.Def.Access) { <div class="mono">access  @(a.Folder.Length == 0 ? "." : a.Folder) = @a.Level</div> }
+                </td>
+                <td>@row.CreatedBy</td>
+                <td>
+                    @if (CanManage)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="() => Edit(row)" />
+                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Size="Size.Small" OnClick="() => Remove(row)" />
+                    }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </MudSimpleTable>
+    @if (_list.Count == 0) { <MudText Class="pa-3">No templates yet.</MudText> }
+    <MudText Typo="Typo.caption" Class="d-block mt-2">Removing a template does not touch any site that was made from it.</MudText>
+}
+
+@code {
+    private Actor? _actor;
+    private IReadOnlyList<SiteTemplateRow> _list = [];
+    private IReadOnlyList<SiteTemplateService.CaptureServer> _servers = [];
+    private IReadOnlyList<SiteTemplateService.CaptureSite> _sites = [];
+    private bool _ok;
+    private string? _msg;
+    private Guid _server0;
+    private Guid _server { get => _server0; set { _server0 = value; _ = LoadSites(); } }
+    private long _site;
+    private bool CanManage => _actor?.Can(Permission.ManageIis) == true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _actor = await Actors.GetAsync();
+        await Load();
+        _servers = await Templates.CaptureSourcesAsync(_actor);
+    }
+
+    private async Task Load() => _list = await Templates.ListAsync(_actor!);
+    private async Task LoadSites() { _site = 0; _sites = _servers.FirstOrDefault(s => s.Id == _server0)?.Sites ?? []; await InvokeAsync(StateHasChanged); }
+
+    private void Report(OpResult r, string done) { _ok = r.Ok; _msg = r.Ok ? done : r.Error; }
+
+    private async Task New() => await Save(null);
+    private async Task Edit(SiteTemplateRow r) => await Save(r);
+
+    private async Task Save(SiteTemplateRow? row)
+    {
+        var dlg = await Dialogs.ShowAsync<TemplateEditDialog>(row is null ? "New template" : "Edit template", new DialogParameters<TemplateEditDialog>
+        { { x => x.Name, row?.Name ?? "" }, { x => x.Description, row?.Description }, { x => x.Def, row?.Def } }, new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true });
+        var res = await dlg.Result;
+        if (res is not { Canceled: false } || res.Data is not TemplateEditDialog.Result r) return;
+        if (row is null) { var c = await Templates.CreateAsync(_actor!, r.Name, r.Description, r.Def); _ok = c.Ok; _msg = c.Ok ? "Template saved." : c.Error; }
+        else Report(await Templates.UpdateAsync(_actor!, row.Id, r.Name, r.Description, r.Def), "Template saved.");
+        await Load();
+    }
+
+    private async Task Capture()
+    {
+        var name = _sites.FirstOrDefault(s => s.IisSiteId == _site)?.Name ?? "site";
+        var c = await Templates.CaptureAsync(_actor!, _server0, _site, $"From {name}", null);
+        _ok = c.Ok; _msg = c.Ok ? $"Template 'From {name}' created. Edit it to rename it and check the folders." : c.Error;
+        await Load();
+    }
+
+    private async Task Remove(SiteTemplateRow r)
+    {
+        var ok = await Dialogs.ShowMessageBoxAsync("Remove template?", $"Remove the template '{r.Name}'? Sites made from it are not touched.", yesText: "Remove", cancelText: "Cancel");
+        if (ok != true) return;
+        Report(await Templates.RemoveAsync(_actor!, r.Id), "Template removed.");
+        await Load();
+    }
+}

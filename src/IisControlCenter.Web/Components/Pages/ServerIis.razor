@@ -3,6 +3,7 @@
 @implements IDisposable
 @inject ActorProvider Actors
 @inject IisOpsService Iis
+@inject SiteTemplateService Templates
 @inject ServerEventBus Bus
 @inject IDialogService Dialogs
 @inject NavigationManager Nav
@@ -27,6 +28,7 @@ else if (_page is not null)
     <MudStack Row="true" Class="mb-3" Spacing="2" Wrap="Wrap.Wrap">
         <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" Disabled="@(!_page.CanAct)" OnClick="CreateSite">Create site</MudButton>
         <MudButton Variant="Variant.Outlined" Disabled="@(!_page.CanAct)" OnClick="CreatePool">Create app pool</MudButton>
+        <MudButton Variant="Variant.Outlined" Disabled="@(!_page.CanAct)" OnClick="FromTemplate">Create site from template…</MudButton>
         <MudButton Variant="Variant.Outlined" Disabled="@(!_page.CanAct)" OnClick="CreateFolder">Create folder</MudButton>
         <MudButton Variant="Variant.Outlined" Disabled="@(!_page.CanAct)" OnClick="Grant">Give a pool access to a folder</MudButton>
         @if (!_page.OwnerMode) { <MudButton Variant="Variant.Text" OnClick="@(() => Nav.NavigateTo($"/servers/{Id}/pools"))">App pools…</MudButton> }
@@ -112,6 +114,26 @@ else { <MudProgressLinear Indeterminate="true" /> }
     {
         var r = await Ask(op, title, hint, siteId, apps, current, Prod, pools);
         if (r is not null) await Do(r.Command, r.Reason, done);
+    }
+
+    private async Task FromTemplate()
+    {
+        var list = await Templates.ListAsync(_actor!);
+        if (list.Count == 0) { _ok = false; _msg = "There are no site templates yet. A Server Operator creates them on the Site templates page."; return; }
+        var dlg = await Dialogs.ShowAsync<TemplateApplyDialog>("Create site from template", new DialogParameters<TemplateApplyDialog>
+        { { x => x.Templates, list }, { x => x.NeedsApproval, Prod }, { x => x.FolderHint, FolderHint } }, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var res = await dlg.Result;
+        if (res is not { Canceled: false } || res.Data is not TemplateApplyDialog.Result r) return;
+        _busy = true; StateHasChanged();
+        try
+        {
+            var o = await Templates.ApplyAsync(_actor!, Id, r.TemplateId, r.Input, _page!.OwnerMode ? _page.ProjectId : null, r.Reason);
+            _ok = o.Ok;
+            _msg = !o.Ok ? "✘ " + o.Error : o.Queued ? "Request sent as one request. A second person has to approve it (see Pool approvals)." : $"✔ Site {r.Input.SiteName} created (stopped) with {o.Steps.Count} steps.";
+        }
+        catch (ForbiddenException ex) { _ok = false; _msg = ex.Message; }
+        _busy = false;
+        await Load();
     }
 
     private Task CreateSite() => Run(IisOp.CreateSite, "Create site", "Site created (stopped)");

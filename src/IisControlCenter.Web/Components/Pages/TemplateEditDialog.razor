@@ -1,0 +1,68 @@
+@using IisControlCenter.Contracts
+<MudDialog>
+    <DialogContent>
+        <MudGrid>
+            <MudItem xs="12" md="6"><MudTextField T="string" @bind-Value="_name" Label="Template name" Immediate="true" /></MudItem>
+            <MudItem xs="12" md="6"><MudTextField T="string" @bind-Value="_desc" Label="Description (optional)" Immediate="true" /></MudItem>
+            <MudItem xs="12"><MudText Typo="Typo.caption">All folders are relative to the site folder you choose when you use the template. One item per line.</MudText></MudItem>
+            <MudItem xs="12" md="6"><MudTextField T="string" @bind-Value="_folders" Label="Extra folders" Placeholder="logs&#10;data/uploads" Lines="4" Immediate="true" /></MudItem>
+            <MudItem xs="12" md="6"><MudTextField T="string" @bind-Value="_apps" Label="Applications: path = folder" Placeholder="/api = api" Lines="4" Immediate="true" /></MudItem>
+            <MudItem xs="12" md="6"><MudTextField T="string" @bind-Value="_vdirs" Label="Virtual directories: path = folder" Placeholder="/files = data/files" Lines="4" Immediate="true" /></MudItem>
+            <MudItem xs="12" md="6"><MudTextField T="string" @bind-Value="_access" Label="Folder access: folder = Read, ReadExecute or Modify" Placeholder="(site folder) = ReadExecute&#10;data/uploads = Modify" Lines="4" Immediate="true" /></MudItem>
+            <MudItem xs="12"><MudText Typo="Typo.caption">A leading application path (for example /api/img) puts a virtual directory inside that application. Use "." for the site folder itself. A template never holds host names, servers or passwords.@(Def?.Pool is not null ? " The captured pool settings are kept as they are." : "")</MudText></MudItem>
+        </MudGrid>
+        @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mt-2" Dense="true"><div style="white-space:pre-wrap">@_error</div></MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public string Name { get; set; } = "";
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public SiteTemplateDef? Def { get; set; }
+
+    public sealed record Result(string Name, string? Description, SiteTemplateDef Def);
+
+    private string _name = "", _desc = "", _folders = "", _apps = "", _vdirs = "", _access = "", _error = null!;
+
+    protected override void OnInitialized()
+    {
+        _name = Name; _desc = Description ?? ""; _error = null!;
+        if (Def is null) return;
+        _folders = string.Join("\n", Def.Folders);
+        _apps = string.Join("\n", Def.Apps.Select(a => $"{a.Path} = {a.Folder}"));
+        _vdirs = string.Join("\n", Def.VirtualDirectories.Select(v => $"{v.Path} = {v.Folder}"));
+        _access = string.Join("\n", Def.Access.Select(a => $"{(a.Folder.Length == 0 ? "." : a.Folder)} = {a.Level}"));
+    }
+
+    private static IEnumerable<string> Lines(string s) => s.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+    private static (string Left, string Right)? Pair(string line) { var i = line.IndexOf('='); return i < 0 ? null : (line[..i].Trim(), line[(i + 1)..].Trim()); }
+
+    private void Save()
+    {
+        var errors = new List<string>();
+        var apps = new List<TemplateApp>(); var vdirs = new List<TemplateVDir>(); var access = new List<TemplateAccess>();
+        foreach (var l in Lines(_apps)) { if (Pair(l) is { } p) apps.Add(new(p.Left, p.Right)); else errors.Add($"'{l}': write it as  path = folder"); }
+        foreach (var l in Lines(_vdirs))
+        {
+            if (Pair(l) is not { } p) { errors.Add($"'{l}': write it as  path = folder"); continue; }
+            var vp = IisRules.NormalizeVirtualPath(p.Left);
+            var owner = apps.Where(a => vp.StartsWith(IisRules.NormalizeVirtualPath(a.Path) + "/", StringComparison.OrdinalIgnoreCase)).OrderByDescending(a => a.Path.Length).FirstOrDefault();
+            vdirs.Add(new(owner is null ? "/" : IisRules.NormalizeVirtualPath(owner.Path), p.Left, p.Right));
+        }
+        foreach (var l in Lines(_access))
+        {
+            if (Pair(l) is not { } p || !Enum.TryParse<FolderAccess>(p.Right, true, out var lvl) || !Enum.IsDefined(lvl) || char.IsDigit(p.Right[0])) { errors.Add($"'{l}': write it as  folder = Read, ReadExecute or Modify"); continue; }
+            access.Add(new(p.Left == "." ? "" : p.Left, lvl));
+        }
+        var def = new SiteTemplateDef { Pool = Def?.Pool, Folders = Lines(_folders).ToList(), Apps = apps, VirtualDirectories = vdirs, Access = access };
+        if (errors.Count == 0) errors.AddRange(TemplateRules.Validate(def));
+        if (TemplateRules.ValidateName(_name) is { } ne) errors.Insert(0, ne);
+        if (errors.Count > 0) { _error = string.Join("\n", errors); return; }
+        Dialog.Close(DialogResult.Ok(new Result(_name.Trim(), string.IsNullOrWhiteSpace(_desc) ? null : _desc.Trim(), def)));
+    }
+}

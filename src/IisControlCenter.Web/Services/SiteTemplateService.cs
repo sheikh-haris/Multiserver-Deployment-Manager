@@ -33,6 +33,24 @@ public sealed class SiteTemplateService(IDbContextFactory<AppDbContext> dbf, Iis
         return list.Select(t => new SiteTemplateRow(t.Id, t.Name, t.Description, JsonSerializer.Deserialize<SiteTemplateDef>(t.Json) ?? new SiteTemplateDef(), t.CreatedBy, t.CreatedAt)).ToList();
     }
 
+    public sealed record CaptureSite(long IisSiteId, string Name);
+    public sealed record CaptureServer(Guid Id, string Name, IReadOnlyList<CaptureSite> Sites);
+
+    /// <summary>The servers and sites the caller can capture a template from.</summary>
+    public async Task<IReadOnlyList<CaptureServer>> CaptureSourcesAsync(Actor actor)
+    {
+        if (!CanManage(actor)) return [];
+        await using var db = await dbf.CreateDbContextAsync();
+        var servers = await db.Servers.AsNoTracking().Where(s => !s.IsDeleted && s.EnvironmentName != null).OrderBy(s => s.Name).ToListAsync();
+        var result = new List<CaptureServer>();
+        foreach (var s in servers.Where(s => actor.Can(Permission.ManageIis, s.EnvironmentName)))
+        {
+            var sites = await db.IisSites.AsNoTracking().Where(x => x.ServerId == s.Id).OrderBy(x => x.Name).Select(x => new CaptureSite(x.IisSiteId, x.Name)).ToListAsync();
+            result.Add(new CaptureServer(s.Id, s.Name, sites));
+        }
+        return result;
+    }
+
     /// <summary>Reads the structure of an existing site from the last discovery. Only applications and virtual directories inside the site folder are captured.</summary>
     public async Task<OpResult<Guid>> CaptureAsync(Actor actor, Guid serverId, long iisSiteId, string name, string? description)
     {
