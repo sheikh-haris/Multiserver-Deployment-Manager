@@ -12,7 +12,22 @@ namespace IisControlCenter.Agent.Pools;
 /// Every rule is checked here, whatever the portal says: envelope, the LOCAL Managed switch, the allowed roots, name and binding rules,
 /// conflicts with what already exists in IIS. There is no delete.
 /// </summary>
-public sealed class IisOpHandler(CommandPolicy policy, AgentConfig config, IIisAdmin iis, ILogger<IisOpHandler> log)
+public interface IPathChecks
+{
+    string? Normalize(string? path);
+    bool IsUnderRoot(string? path);
+    bool IsStrictlyUnderRoot(string? path);
+}
+
+/// <summary>The real rules: <see cref="PathGuard"/> against the roots in the agent's LOCAL config.</summary>
+public sealed class GuardedPaths(AgentConfig config) : IPathChecks
+{
+    public string? Normalize(string? path) => PathGuard.Normalize(path);
+    public bool IsUnderRoot(string? path) => PathGuard.IsUnderAnyRoot(path, config.AllowedRoots);
+    public bool IsStrictlyUnderRoot(string? path) => PathGuard.IsStrictlyUnderAnyRoot(path, config.AllowedRoots);
+}
+
+public sealed class IisOpHandler(CommandPolicy policy, AgentConfig config, IIisAdmin iis, IPathChecks paths, ILogger<IisOpHandler> log)
 {
     private static readonly SemaphoreSlim OneAtATime = new(1, 1);          // ServerManager commits collide otherwise
 
@@ -57,9 +72,9 @@ public sealed class IisOpHandler(CommandPolicy policy, AgentConfig config, IIisA
 
     private string? SafeNewPath(string? path, out string normalized)
     {
-        normalized = PathGuard.Normalize(path) ?? "";
+        normalized = paths.Normalize(path) ?? "";
         if (normalized.Length == 0) return "The folder is not a valid local path (no .., UNC, drive letter only, or odd names).";
-        if (!PathGuard.IsStrictlyUnderAnyRoot(path, config.AllowedRoots)) return $"The folder must be inside an allowed root of this server ({string.Join("; ", config.AllowedRoots)}), not the root itself.";
+        if (!paths.IsStrictlyUnderRoot(path)) return $"The folder must be inside an allowed root of this server ({string.Join("; ", config.AllowedRoots)}), not the root itself.";
         return null;
     }
 
@@ -71,8 +86,8 @@ public sealed class IisOpHandler(CommandPolicy policy, AgentConfig config, IIisA
         while (!string.IsNullOrEmpty(cur) && !Directory.Exists(cur)) cur = Path.GetDirectoryName(cur);
         while (!string.IsNullOrEmpty(cur))
         {
-            var norm = PathGuard.Normalize(cur);
-            if (norm is null || !PathGuard.IsUnderAnyRoot(cur, config.AllowedRoots)) break;                 // above the roots: not our business
+            var norm = paths.Normalize(cur);
+            if (norm is null || !paths.IsUnderRoot(cur)) break;                 // above the roots: not our business
             if (Directory.Exists(cur) && FolderScanner.IsReparsePoint(cur)) return $"'{cur}' is a link. Links inside the roots are not followed.";
             cur = Path.GetDirectoryName(cur);
         }
@@ -97,7 +112,7 @@ public sealed class IisOpHandler(CommandPolicy policy, AgentConfig config, IIisA
         foreach (var s in iis.Sites())
             foreach (var a in s.Apps)
                 foreach (var v in a.VirtualDirs)
-                    if (PathGuard.Normalize(v.PhysicalPath) == normalized)
+                    if (paths.Normalize(v.PhysicalPath) == normalized)
                         return $"The folder is already used by IIS ({s.Name}{(a.Path == "/" ? "" : a.Path)}{(v.Path == "/" ? "" : v.Path)}). Two items must not share one folder.";
         return null;
     }

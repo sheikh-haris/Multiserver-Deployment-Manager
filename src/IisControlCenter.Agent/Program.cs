@@ -43,6 +43,7 @@ else
     builder.Services.AddSingleton<IIisInspector>(sp => new SampleInspector(sp.GetRequiredService<SamplePoolAdmin>(), sp.GetRequiredService<IIisAdmin>()));
 }
 builder.Services.AddSingleton<IisControlCenter.Agent.Pools.PoolHandler>();
+builder.Services.AddSingleton<IisControlCenter.Agent.Pools.IPathChecks, IisControlCenter.Agent.Pools.GuardedPaths>();
 builder.Services.AddSingleton<IisControlCenter.Agent.Pools.IisOpHandler>();
 
 // ---- deployment services ----

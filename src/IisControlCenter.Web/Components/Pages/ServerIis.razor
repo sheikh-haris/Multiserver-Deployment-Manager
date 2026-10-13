@@ -1,0 +1,134 @@
+@page "/servers/{Id:guid}/iis"
+@attribute [Authorize]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject IisOpsService Iis
+@inject ServerEventBus Bus
+@inject IDialogService Dialogs
+@inject NavigationManager Nav
+<PageTitle>IIS management</PageTitle>
+
+@if (_loaded && _page is null) { <MudAlert Severity="Severity.Warning">Server not found, or you do not have access to it.</MudAlert> }
+else if (_page is not null)
+{
+    var s = _page.Server;
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2" Wrap="Wrap.Wrap">
+        @if (!_page.OwnerMode) { <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="@(() => Nav.NavigateTo($"/servers/{Id}"))" /> }
+        else { <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" OnClick="@(() => Nav.NavigateTo($"/projects/{_page.ProjectId}"))" /> }
+        <MudText Typo="Typo.h4">IIS on @s.Name</MudText>
+        <StatusChip Status="@s.Mode.ToString()" />
+        @if (s.EnvironmentName is not null) { <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(s.EnvironmentName == "Prod" ? Color.Error : Color.Default)">@s.EnvironmentName</MudChip> }
+    </MudStack>
+    @if (_page.OwnerMode) { <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">You are acting as Project Owner. You can create and manage your project's own items here. Other items are shown for information only.</MudAlert> }
+    @if (_page.WhyNot is not null) { <MudAlert Severity="Severity.Info" Class="mb-3">@_page.WhyNot</MudAlert> }
+    @if (_msg is not null) { <MudAlert Severity="@(_ok ? Severity.Success : Severity.Error)" Class="mb-3" ShowCloseIcon="true" CloseIconClicked="@(() => _msg = null)"><div style="white-space:pre-wrap">@_msg</div></MudAlert> }
+    @if (_busy) { <MudProgressLinear Indeterminate="true" Class="mb-2" /> }
+
+    <MudStack Row="true" Class="mb-3" Spacing="2" Wrap="Wrap.Wrap">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" Disabled="@(!_page.CanAct)" OnClick="CreateSite">Create site</MudButton>
+        <MudButton Variant="Variant.Outlined" Disabled="@(!_page.CanAct)" OnClick="CreatePool">Create app pool</MudButton>
+        <MudButton Variant="Variant.Outlined" Disabled="@(!_page.CanAct)" OnClick="CreateFolder">Create folder</MudButton>
+        <MudButton Variant="Variant.Outlined" Disabled="@(!_page.CanAct)" OnClick="Grant">Give a pool access to a folder</MudButton>
+        @if (!_page.OwnerMode) { <MudButton Variant="Variant.Text" OnClick="@(() => Nav.NavigateTo($"/servers/{Id}/pools"))">App pools…</MudButton> }
+    </MudStack>
+
+    <MudSimpleTable Dense="true" Hover="true">
+        <thead><tr><th>Site</th><th>State</th><th>HTTP bindings</th><th>Folder</th><th>Pool</th><th>Applications</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var site in _page.Sites)
+        {
+            var st = site;
+            <tr>
+                <td><b>@st.Name</b> @if (st.Linked) { <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">linked</MudChip> } @if (_page.OwnerMode && st.Owned) { <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">yours</MudChip> }</td>
+                <td><StatusChip Status="@st.State" /></td>
+                <td>@foreach (var b in st.Http) { <div class="mono">@b.Host:@b.Port</div> } @foreach (var o in st.OtherBindings) { <div class="mono" style="opacity:.6">@o</div> }</td>
+                <td class="mono">@st.Folder</td>
+                <td>@st.Pool</td>
+                <td>@foreach (var a in st.Apps) { <div class="mono">@a.Path → @a.Folder (@a.Pool)</div> }</td>
+                <td>
+                    @if (_page.CanAct && st.Owned)
+                    {
+                        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small">
+                            <MudMenuItem OnClick="() => Start(st)">Start</MudMenuItem>
+                            <MudMenuItem OnClick="() => Stop(st)">Stop</MudMenuItem>
+                            <MudMenuItem OnClick="() => EditBindings(st)">Edit HTTP bindings</MudMenuItem>
+                            <MudMenuItem OnClick="() => AddApp(st)">Add application</MudMenuItem>
+                            <MudMenuItem OnClick="() => AddVDir(st)">Add virtual directory</MudMenuItem>
+                        </MudMenu>
+                    }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </MudSimpleTable>
+    @if (_page.Sites.Count == 0) { <MudText Class="pa-3">No sites found yet. Run discovery on the server page.</MudText> }
+    <MudText Typo="Typo.caption" Class="d-block mt-2">There is no delete here. Removing sites, applications or pools stays in IIS Manager. Folders and files are never deleted.</MudText>
+}
+else { <MudProgressLinear Indeterminate="true" /> }
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    [SupplyParameterFromQuery(Name = "project")] public Guid? ProjectId { get; set; }
+
+    private Actor? _actor;
+    private IisPage? _page;
+    private bool _loaded, _busy, _ok;
+    private string? _msg;
+    private bool Prod => _page?.Server.EnvironmentName == "Prod";
+
+    protected override async Task OnInitializedAsync() { Bus.Changed += OnChanged; await Load(); }
+    protected override async Task OnParametersSetAsync() => await Load();
+    private async Task Load() { _actor = await Actors.GetAsync(); _page = await Iis.GetPageAsync(_actor, Id, ProjectId); _loaded = true; }
+    private void OnChanged(ServerChanged e) { if (e.ServerId == Id) _ = InvokeAsync(async () => { await Load(); StateHasChanged(); }); }
+
+    private string FolderHint => (_page?.Server.AllowedRoots ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() is { } r ? r.TrimEnd('\\') + @"\mysite" : @"D:\Websites\mysite";
+
+    private async Task<IisOpDialog.Result?> Ask(IisOp op, string title, string? hint = null, long siteId = 0, IReadOnlyList<string>? apps = null, IReadOnlyList<HttpBinding>? current = null, bool needsApproval = false, IReadOnlyList<string>? pools = null)
+    {
+        var dlg = await Dialogs.ShowAsync<IisOpDialog>(title, new DialogParameters<IisOpDialog>
+        {
+            { x => x.Op, op }, { x => x.Title, title }, { x => x.Hint, hint }, { x => x.Pools, pools ?? _page!.Pools }, { x => x.Apps, apps ?? ["/"] }, { x => x.SiteId, siteId },
+            { x => x.CurrentBindings, current ?? [] }, { x => x.CanModify, _page!.CanModify }, { x => x.NeedsApproval, needsApproval }, { x => x.OwnerMode, _page!.OwnerMode }, { x => x.FolderHint, FolderHint },
+        }, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var res = await dlg.Result;
+        return res is { Canceled: false } && res.Data is IisOpDialog.Result r ? r : null;
+    }
+
+    private async Task Do(IisOpCommand c, string? reason, string done)
+    {
+        _busy = true; StateHasChanged();
+        try
+        {
+            var o = await Iis.RunAsync(_actor!, Id, c, _page!.OwnerMode ? _page.ProjectId : null, reason);
+            _ok = o.Ok;
+            _msg = !o.Ok ? "✘ " + o.Error : o.Queued ? "Request sent. A second person has to approve it (see Pool approvals)." : $"✔ {done}. {o.Result?.After}";
+        }
+        catch (ForbiddenException ex) { _ok = false; _msg = ex.Message; }
+        _busy = false;
+        await Load();
+    }
+
+    private async Task Run(IisOp op, string title, string done, string? hint = null, long siteId = 0, IReadOnlyList<string>? apps = null, IReadOnlyList<HttpBinding>? current = null, IReadOnlyList<string>? pools = null)
+    {
+        var r = await Ask(op, title, hint, siteId, apps, current, Prod, pools);
+        if (r is not null) await Do(r.Command, r.Reason, done);
+    }
+
+    private Task CreateSite() => Run(IisOp.CreateSite, "Create site", "Site created (stopped)");
+    private Task CreatePool() => Run(IisOp.CreatePool, "Create app pool", "App pool created");
+    private Task CreateFolder() => Run(IisOp.CreateFolder, "Create folder", "Folder created");
+    private Task Grant() => Run(IisOp.GrantFolderAccess, "Give an app pool access to a folder", "Access given");
+    private Task EditBindings(IisSiteRow s) => Run(IisOp.UpdateBindings, $"HTTP bindings of {s.Name}", "Bindings saved", siteId: s.SiteId, current: s.Http);
+    private Task AddApp(IisSiteRow s) => Run(IisOp.CreateApplication, $"Add an application to {s.Name}", "Application created", siteId: s.SiteId);
+    private Task AddVDir(IisSiteRow s) => Run(IisOp.CreateVirtualDirectory, $"Add a virtual directory to {s.Name}", "Virtual directory created", siteId: s.SiteId, apps: ["/", ..s.Apps.Select(a => a.Path)]);
+    private Task Start(IisSiteRow s) => Do(new IisOpCommand { Op = IisOp.StartSite, SiteId = s.SiteId }, null, $"{s.Name} started");
+
+    private async Task Stop(IisSiteRow s)
+    {
+        if (Prod) { var r = await Ask(IisOp.StopSite, $"Stop {s.Name}", null, s.SiteId, needsApproval: true); if (r is null) return; await Do(new IisOpCommand { Op = IisOp.StopSite, SiteId = s.SiteId }, r.Reason, "Stopped"); return; }
+        var ok = await Dialogs.ShowMessageBoxAsync("Stop site?", $"Stop {s.Name}? It stops answering requests until you start it again.", yesText: "Stop", cancelText: "Cancel");
+        if (ok == true) await Do(new IisOpCommand { Op = IisOp.StopSite, SiteId = s.SiteId }, null, $"{s.Name} stopped");
+    }
+
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

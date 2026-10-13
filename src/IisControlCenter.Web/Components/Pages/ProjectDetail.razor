@@ -66,6 +66,16 @@ else if (_view is not null)
                         }
                     </MudStack>
 
+                    @if (_actor!.Access.IsProjectOwner(Id))
+                    {
+                        <MudStack Row="true" Class="mt-2" Spacing="1" Wrap="Wrap.Wrap">
+                            @foreach (var sv in c.Targets.Where(x => x.EnvironmentName != "Prod").Select(x => (x.ServerId, x.ServerName, x.EnvironmentName)).Distinct())
+                            {
+                                var link = sv;
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Dns" OnClick="@(() => Nav.NavigateTo($"/servers/{link.ServerId}/iis?project={Id}"))">IIS on @link.ServerName (@link.EnvironmentName)</MudButton>
+                            }
+                        </MudStack>
+                    }
                     @if (c.Targets.Count == 0) { <MudText Class="mt-2" Typo="Typo.body2">No deployment targets yet.</MudText> }
                     else
                     {

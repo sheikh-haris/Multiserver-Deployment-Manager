@@ -154,6 +154,44 @@ await shot(dep, '11-deployer-recycle');
 await appr.goto(`${PORTAL}/projects/${PID}`); await appr.waitForLoadState('networkidle');
 must(await appr.getByRole('button', { name: /Recycle pool/ }).count() === 0, 'an Approver (no Deployer role) has no Recycle button');
 
+// ---------- 6b. IIS management: an operator creates a site; a project Owner creates their own ----------
+await op.goto(`${PORTAL}/servers/${SID}/iis`); await op.waitForLoadState('networkidle');
+await op.getByRole('button', { name: 'Create site' }).click();
+const dlg = op.locator('.mud-dialog-container');
+await dlg.getByLabel('Site name').fill('blog');
+await dlg.getByLabel('Folder on the server').fill(`${W}/websites/blog`);
+await dlg.getByLabel('Host name').fill('blog.test');
+await dlg.getByLabel('Port').fill('8090');
+await dlg.getByRole('button', { name: 'Do it' }).click();
+await op.getByText(/Site created \(stopped\)/).waitFor({ timeout: 30000 });
+must(fs.existsSync(`${W}/websites/blog`), 'the site folder was created inside the allowed root');
+const blogRow = op.locator('tr', { hasText: 'blog' });
+await blogRow.getByText('Stopped').waitFor({ timeout: 30000 });
+await blogRow.locator('button').last().click();
+await op.getByRole('menuitem', { name: 'Start' }).click();
+await blogRow.getByText('Started').waitFor({ timeout: 30000 });
+await shot(op, '12-iis-site-created');
+must(true, 'the new site is listed, starts stopped, and can be started');
+
+// a folder outside the root is refused by the agent
+await op.getByRole('button', { name: 'Create folder' }).click();
+await op.locator('.mud-dialog-container').getByLabel('New folder').fill('/etc/evil');
+await op.locator('.mud-dialog-container').getByRole('button', { name: 'Do it' }).click();
+await op.getByText(/allowed root/).waitFor({ timeout: 30000 });
+must(!fs.existsSync('/etc/evil'), 'a folder outside the allowed root is refused');
+
+await page0.request.post(`${PORTAL}/dev/e2e/grant?persona=approver2&projectId=${PID}&role=ProjectOwner&env=Dev`);
+const own = await person('approver2');
+await own.goto(`${PORTAL}/projects/${PID}`); await own.waitForLoadState('networkidle');
+await own.getByRole('button', { name: /IIS on SMOKE01/ }).click();
+await own.waitForURL(/\/iis\?project=/); await own.waitForLoadState('networkidle');
+await own.getByRole('button', { name: 'Create app pool' }).click();
+await own.locator('.mud-dialog-container').getByLabel('App pool name').fill('ownpool');
+await own.locator('.mud-dialog-container').getByRole('button', { name: 'Do it' }).click();
+await own.getByText(/App pool created/).waitFor({ timeout: 30000 });
+await shot(own, '13-owner-iis');
+must(true, 'a project Owner creates an app pool for their project');
+
 // ---------- 7. pages that must load ----------
 for (const p of ['/deployments', '/', `/projects/${PID}`, '/reports/deployments', '/pools/requests', `/servers/${SID}/pools`]) {
   await page0.goto(`${PORTAL}${p}`); await page0.waitForLoadState('networkidle'); await shot(page0, 'page' + p.replace(/\W+/g, '-'));

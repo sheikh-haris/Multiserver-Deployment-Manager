@@ -2,7 +2,6 @@ using IisControlCenter.Agent.Security;
 
 namespace IisControlCenter.Agent.Tests;
 
-[Collection("PosixPathMode")]
 public class PathGuardTests
 {
     private static readonly string[] Roots = [@"D:\Websites"];
@@ -84,4 +83,17 @@ public class PathGuardTests
         Assert.False(PathGuard.IsUnderAnyRoot(@"D:\x", [@"D:\"]));                   // whole drive is ignored
         Assert.False(PathGuard.IsUnderAnyRoot(@"D:\Websites", []));
     }
+
+    [Theory]
+    [InlineData(@"D:\Websites\shop", true)]
+    [InlineData(@"d:/websites/shop/api", true)]
+    [InlineData(@"D:\Websites", false)]            // the root itself
+    [InlineData(@"D:\Websites\", false)]
+    [InlineData(@"D:\Websites\..\Windows", false)]
+    [InlineData(@"D:\Websites2\x", false)]
+    [InlineData(@"E:\Websites\shop", false)]
+    [InlineData(@"\\server\share\shop", false)]
+    [InlineData(@"D:\Websites\con\x", false)]
+    public void Creating_things_needs_a_path_strictly_below_a_root(string path, bool ok) =>
+        Assert.Equal(ok, PathGuard.IsStrictlyUnderAnyRoot(path, [@"D:\Websites"]));
 }

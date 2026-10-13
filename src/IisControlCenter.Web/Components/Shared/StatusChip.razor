@@ -1,4 +1,4 @@
-<MudChip T="string" Size="Size.Small" Color="@_color" Variant="Variant.Filled" Class="@Class">@(Text ?? Status)</MudChip>
+<MudChip @key="@Status" T="string" Size="Size.Small" Color="@_color" Variant="Variant.Filled" Class="@Class">@(Text ?? Status)</MudChip>
 @code {
     /// <summary>One colour map for the whole portal.</summary>
     [Parameter] public string Status { get; set; } = "";

@@ -8,8 +8,14 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace IisControlCenter.Agent.Tests;
 
-/// <summary>Runs with POSIX dev paths on Linux (Debug builds only). Serialised with the PathGuard tests, which assert Windows-only rules.</summary>
-[Collection("PosixPathMode")]
+/// <summary>Path rules for a Linux test machine (the real ones are Windows rules, covered by PathGuardTests and the Windows CI job).</summary>
+internal sealed class PosixTestPaths(string root) : IPathChecks
+{
+    public string? Normalize(string? p) => string.IsNullOrWhiteSpace(p) || !p.StartsWith('/') || p.Split('/').Any(x => x == "..") ? null : p.TrimEnd('/');
+    public bool IsUnderRoot(string? p) => Normalize(p) is { } n && (n == root || n.StartsWith(root + "/", StringComparison.Ordinal));
+    public bool IsStrictlyUnderRoot(string? p) => Normalize(p) is { } n && n != root && IsUnderRoot(p);
+}
+
 public class IisOpHandlerTests : IDisposable
 {
     private static readonly Guid Me = Guid.NewGuid();
@@ -18,18 +24,16 @@ public class IisOpHandlerTests : IDisposable
     private readonly SamplePoolAdmin pools = new();
     private readonly SampleIisAdmin iis;
     private readonly IisOpHandler h;
-    private readonly string? oldMode = Environment.GetEnvironmentVariable("ICC_DEV_POSIX_PATHS");
 
     public IisOpHandlerTests()
     {
-        Environment.SetEnvironmentVariable("ICC_DEV_POSIX_PATHS", "1");
         Directory.CreateDirectory(root);
         iis = new SampleIisAdmin(pools);
         var cfg = new AgentConfig { PortalUrl = "https://agents.local", Environment = "Dev", AllowedRoots = [root], ServerId = Me, AllowManaged = true };
-        h = new IisOpHandler(new CommandPolicy(cfg, clock), cfg, iis, NullLogger<IisOpHandler>.Instance);
+        h = new IisOpHandler(new CommandPolicy(cfg, clock), cfg, iis, new PosixTestPaths(root), NullLogger<IisOpHandler>.Instance);
     }
 
-    public void Dispose() { Environment.SetEnvironmentVariable("ICC_DEV_POSIX_PATHS", oldMode); try { Directory.Delete(root, true); } catch { } }
+    public void Dispose() { try { Directory.Delete(root, true); } catch { } }
 
     private CommandEnvelope Env(ServerMode m = ServerMode.Managed, string env = "Dev") => new(Guid.NewGuid(), Me, env, clock.GetUtcNow(), clock.GetUtcNow().AddMinutes(5), "c", m);
     private string P(string rel) => Path.Combine(root, rel);
@@ -50,7 +54,7 @@ public class IisOpHandlerTests : IDisposable
         var c = new IisOpCommand { Op = IisOp.CreatePool, PoolName = "NewPool" };
         Assert.Contains("ReadOnly", (await Run(c, ServerMode.ReadOnly)).Error);
         Assert.Contains("Prod", (await h.RunAsync(Env(env: "Prod"), c)).Error);
-        Assert.False(pools.Names.Contains("NewPool"));
+        Assert.DoesNotContain("NewPool", pools.Names);
     }
 
     // ---------------- pools ----------------
