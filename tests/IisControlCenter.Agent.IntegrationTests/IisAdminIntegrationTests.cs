@@ -18,7 +18,8 @@ public sealed class IisAdminIntegrationTests : IClassFixture<IisFixture>, IDispo
     private readonly IisAdmin admin = new();
     private readonly string id = Guid.NewGuid().ToString("N")[..6];
     private readonly List<string> sites = [], pools = [];
-    private string Root => Path.Combine(Path.GetTempPath(), "icc-itadm-" + id);
+    // Not under the user profile: the agent refuses roots inside \Users, \Windows and similar system folders (that is the rule being relied on).
+    private string Root => Path.Combine(Path.GetPathRoot(Environment.SystemDirectory)!, "icc-itadm-" + id);
 
     public IisAdminIntegrationTests(IisFixture fx) { this.fx = fx; }
 
