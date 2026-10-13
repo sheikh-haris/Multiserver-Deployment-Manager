@@ -100,6 +100,11 @@ else { <MudProgressLinear Indeterminate="true" /> }
         var text = $"{verb} {chosen.Count} app pool(s) on {_page.Server.Name}: {string.Join(", ", chosen.Select(p => p.Name))}." +
                    (action != PoolActions.Start && impact.Count > 0 ? $" This affects: {string.Join(", ", impact)}." : "") +
                    (action == PoolActions.Stop ? " Sites using these pools will be unavailable until they are started again." : action == PoolActions.Recycle ? " Requests in progress may fail briefly." : "");
+        if (IsProd && action == PoolActions.Stop)
+        {
+            await RequestAsync(PoolActions.Stop, text, chosen);
+            return;
+        }
         var confirmed = action == PoolActions.Start;
         if (!confirmed)
         {
@@ -123,22 +128,53 @@ else { <MudProgressLinear Indeterminate="true" /> }
         await Load();
     }
 
+    private async Task RequestAsync(string action, string text, IReadOnlyList<PoolRow> chosen)
+    {
+        var dlg = await Dialogs.ShowAsync<ReasonDialog>("PRODUCTION: request to stop pools", new DialogParameters<ReasonDialog>
+        {
+            { x => x.Message, text + " Stopping pools in Production needs a second person (another Server Operator or a Platform Admin) to approve. It runs when they approve." },
+            { x => x.ButtonText, "Send for approval" } });
+        var res = await dlg.Result;
+        if (res is not { Canceled: false } || res.Data is not string reason || string.IsNullOrWhiteSpace(reason)) return;
+        _busy = true; StateHasChanged();
+        try
+        {
+            var q = await Pools.RequestStopAsync(_actor!, Id, chosen.Select(p => p.Name).ToList(), reason);
+            _msgOk = q.Ok; _msg = q.Ok ? "Request sent. A second person has to approve it (see Pool approvals)." : "✘ " + q.Error;
+        }
+        catch (ForbiddenException ex) { _msgOk = false; _msg = ex.Message; }
+        _busy = false;
+        await Load();
+    }
+
     private async Task Edit(PoolRow p)
     {
         var dlg = await Dialogs.ShowAsync<PoolEditDialog>($"Edit app pool", new DialogParameters<PoolEditDialog> { { x => x.Pool, p } }, new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
         var res = await dlg.Result;
         if (res is not { Canceled: false } || res.Data is not PoolEditDialog.Result r) return;
-        var confirmed = !IsProd;
         if (IsProd)
         {
-            var d2 = await Dialogs.ShowAsync<ConfirmDangerDialog>("PRODUCTION: change app pool", new DialogParameters<ConfirmDangerDialog> { { x => x.Message, $"Change settings of {p.Name} on {_page!.Server.Name}. It affects: {string.Join(", ", p.Components.Concat(p.Sites).DefaultIfEmpty("nothing linked"))}." }, { x => x.ConfirmText, "PROD" }, { x => x.ButtonText, "Change" } });
-            confirmed = (await d2.Result) is { Canceled: false };
-            if (!confirmed) return;
+            var d2 = await Dialogs.ShowAsync<ReasonDialog>("PRODUCTION: request a pool change", new DialogParameters<ReasonDialog>
+            {
+                { x => x.Message, $"Change settings of {p.Name} on {_page!.Server.Name}. It affects: {string.Join(", ", p.Components.Concat(p.Sites).DefaultIfEmpty("nothing linked"))}. Changes in Production need a second person (another Server Operator or a Platform Admin) to approve. The change runs when they approve." },
+                { x => x.ButtonText, "Send for approval" } });
+            var rr = await d2.Result;
+            if (rr is not { Canceled: false } || rr.Data is not string reason || string.IsNullOrWhiteSpace(reason)) return;
+            _busy = true; StateHasChanged();
+            try
+            {
+                var q = await Pools.RequestEditAsync(_actor!, Id, p.Name, r.Change, r.Expected, reason);
+                _msgOk = q.Ok; _msg = q.Ok ? "Request sent. A second person has to approve it (see Pool approvals)." : "✘ " + q.Error;
+            }
+            catch (ForbiddenException ex) { _msgOk = false; _msg = ex.Message; }
+            _busy = false;
+            await Load();
+            return;
         }
         _busy = true; StateHasChanged();
         try
         {
-            var o = await Pools.UpdateAsync(_actor!, Id, p.Name, r.Change, r.Expected, confirmed);
+            var o = await Pools.UpdateAsync(_actor!, Id, p.Name, r.Change, r.Expected, true);
             _msgOk = o.Ok; _msg = o.Ok ? $"✔ {p.Name} saved." : "✘ " + o.Error;
         }
         catch (ForbiddenException ex) { _msgOk = false; _msg = ex.Message; }

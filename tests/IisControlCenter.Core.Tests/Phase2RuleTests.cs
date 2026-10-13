@@ -372,4 +372,12 @@ public class GrantRulesTests
     [InlineData(Role.ServerOperator)]
     [InlineData(Role.Auditor)]
     public void Platform_roles_are_never_project_grants(Role role) => Assert.NotNull(GrantRules.Check(true, true, role));
+
+    [Fact]
+    public void Only_a_deployer_may_recycle_pools_of_the_project_and_only_in_their_environment()
+    {
+        foreach (var role in new[] { Role.ProjectViewer, Role.Approver, Role.ProjectOwner })
+            Assert.False(ProjectRolePermissions.Grants(role, ProjectPermission.RecyclePool), role.ToString());
+        Assert.True(ProjectRolePermissions.Grants(Role.Deployer, ProjectPermission.RecyclePool));
+    }
 }

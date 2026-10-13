@@ -186,3 +186,35 @@ public class ProtectedListConfirmation
     /// <summary>Hash of the protected list when it was confirmed. If the list changes, the confirmation is void.</summary>
     public string ListHash { get; set; } = "";
 }
+
+public enum PoolRequestKind { Stop, Edit }
+
+public enum PoolRequestStatus { Pending, Executed, Failed, Rejected, Cancelled, Expired }
+
+/// <summary>
+/// In Production, stopping app pools and editing their settings needs a second person (decision after Phase 4a).
+/// The request stores exactly what will run. The approver's click runs it, with the same stale-value protection as a direct edit.
+/// </summary>
+public class PoolChangeRequest
+{
+    public Guid Id { get; set; }
+    public Guid ServerId { get; set; }
+    public string EnvironmentName { get; set; } = "";
+    public PoolRequestKind Kind { get; set; }
+    /// <summary>JSON list of pool names. For an edit: exactly one.</summary>
+    public string PoolsJson { get; set; } = "[]";
+    /// <summary>Edit only: the PoolConfig change and what the requester saw (JSON).</summary>
+    public string? ChangeJson { get; set; }
+    public string? ExpectedJson { get; set; }
+    public string Reason { get; set; } = "";
+    public PoolRequestStatus Status { get; set; } = PoolRequestStatus.Pending;
+    public string RequestedBy { get; set; } = "";
+    public string RequestedById { get; set; } = "";
+    public DateTimeOffset RequestedAt { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+    public string? DecidedBy { get; set; }
+    public string? DecidedById { get; set; }
+    public DateTimeOffset? DecidedAt { get; set; }
+    public string? DecisionComment { get; set; }
+    public string? ResultMessage { get; set; }
+}

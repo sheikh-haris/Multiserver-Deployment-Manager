@@ -40,6 +40,7 @@ public class AppDbContext : DbContext
     public DbSet<DeploymentLogLine> DeploymentLogLines => Set<DeploymentLogLine>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<ProtectedListConfirmation> ProtectedListConfirmations => Set<ProtectedListConfirmation>();
+    public DbSet<PoolChangeRequest> PoolChangeRequests => Set<PoolChangeRequest>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -409,6 +410,21 @@ public class AppDbContext : DbContext
             e.HasOne<DeploymentRun>().WithMany().HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Cascade);
         });
 
+        b.Entity<PoolChangeRequest>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.EnvironmentName).HasMaxLength(50);
+            e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.Reason).HasMaxLength(1000);
+            e.Property(x => x.RequestedBy).HasMaxLength(300);
+            e.Property(x => x.RequestedById).HasMaxLength(200);
+            e.Property(x => x.DecidedBy).HasMaxLength(300);
+            e.Property(x => x.DecidedById).HasMaxLength(200);
+            e.Property(x => x.DecisionComment).HasMaxLength(1000);
+            e.Property(x => x.ResultMessage).HasMaxLength(2000);
+            e.HasIndex(x => new { x.Status, x.ServerId });
+        });
         b.Entity<Notification>(e =>
         {
             e.HasKey(x => x.Id);

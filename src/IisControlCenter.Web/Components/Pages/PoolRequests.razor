@@ -1,0 +1,92 @@
+@page "/pools/requests"
+@attribute [Authorize]
+@implements IDisposable
+@inject ActorProvider Actors
+@inject PoolAdminService Pools
+@inject ServerEventBus Bus
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+<PageTitle>Pool approvals</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-1">Pool approvals</MudText>
+<MudText Typo="Typo.body2" Class="mb-3">In Production, stopping app pools and changing their settings needs a second person. Approving runs the change right away.</MudText>
+
+@if (_rows is null) { <MudProgressLinear Indeterminate="true" /> }
+else if (_rows.Count == 0) { <MudText>No requests in the last 14 days.</MudText> }
+else
+{
+    @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mb-2" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert> }
+    <MudSimpleTable Dense="true" Hover="true">
+        <thead><tr><th>Status</th><th>Server</th><th>What</th><th>Reason</th><th>By</th><th>When</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var r in _rows)
+        {
+            var row = r;
+            <tr>
+                <td><StatusChip Status="@(row.Request.Status == PoolRequestStatus.Executed ? "Succeeded" : row.Request.Status.ToString())" Text="@row.Request.Status.ToString()" /></td>
+                <td>@row.ServerName <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined">@row.Request.EnvironmentName</MudChip></td>
+                <td><b>@(row.Request.Kind == PoolRequestKind.Stop ? "STOP" : "EDIT")</b> @string.Join(", ", row.Pools)
+                    @if (row.ChangeSummary is not null) { <div class="mono" style="font-size:12px">@row.ChangeSummary</div> }
+                    @if (row.Request.ResultMessage is not null) { <div style="font-size:12px">Result: @row.Request.ResultMessage</div> }</td>
+                <td style="max-width:260px">@row.Request.Reason @if (row.Request.DecisionComment is not null) { <div><i>@row.Request.DecidedBy: @row.Request.DecisionComment</i></div> }</td>
+                <td>@row.Request.RequestedBy</td>
+                <td>@row.Request.RequestedAt.ToLocalTime().ToString("MM-dd HH:mm")</td>
+                <td>
+                    @if (row.CanDecide)
+                    {
+                        <MudButton Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" OnClick="() => Decide(row, true)" Disabled="_busy">Approve and run</MudButton>
+                        <MudButton Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" OnClick="() => Decide(row, false)" Disabled="_busy">Reject</MudButton>
+                    }
+                    else if (row.Request.Status == PoolRequestStatus.Pending && row.WhyCannotDecide is not null) { <MudText Typo="Typo.caption">@row.WhyCannotDecide</MudText> }
+                    @if (row.CanCancel) { <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="() => Cancel(row)" Disabled="_busy">Cancel</MudButton> }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </MudSimpleTable>
+    @if (_rejecting is not null)
+    {
+        <MudPaper Class="pa-3 mt-3" Outlined="true">
+            <MudTextField T="string" @bind-Value="_comment" Label="Reason for rejecting" Immediate="true" />
+            <MudButton Class="mt-2" Color="Color.Error" Variant="Variant.Filled" OnClick="ConfirmReject" Disabled="@string.IsNullOrWhiteSpace(_comment)">Reject</MudButton>
+            <MudButton Class="mt-2" OnClick="@(() => _rejecting = null)">Back</MudButton>
+        </MudPaper>
+    }
+}
+
+@code {
+    private Actor? _actor;
+    private IReadOnlyList<PoolAdminService.PoolRequestRow>? _rows;
+    private bool _busy;
+    private string? _error, _comment;
+    private PoolAdminService.PoolRequestRow? _rejecting;
+
+    protected override async Task OnInitializedAsync() { _actor = await Actors.GetAsync(); await Load(); Bus.Changed += OnChanged; }
+    private async Task Load() => _rows = await Pools.RequestsAsync(_actor!);
+    private void OnChanged(ServerChanged e) => _ = InvokeAsync(async () => { await Load(); StateHasChanged(); });
+
+    private async Task Decide(PoolAdminService.PoolRequestRow r, bool approve)
+    {
+        if (!approve) { _rejecting = r; _comment = null; return; }
+        _busy = true; _error = null;
+        try { var o = await Pools.DecideAsync(_actor!, r.Request.Id, true, null); if (o.Ok) Snackbar.Add("Approved and done.", Severity.Success); else _error = o.Error; }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        _busy = false; await Load();
+    }
+
+    private async Task ConfirmReject()
+    {
+        _busy = true; _error = null;
+        try { var o = await Pools.DecideAsync(_actor!, _rejecting!.Request.Id, false, _comment); if (!o.Ok) _error = o.Error; }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        _rejecting = null; _busy = false; await Load();
+    }
+
+    private async Task Cancel(PoolAdminService.PoolRequestRow r)
+    {
+        try { var o = await Pools.CancelRequestAsync(_actor!, r.Request.Id); if (!o.Ok) _error = o.Error; }
+        catch (ForbiddenException ex) { _error = ex.Message; }
+        await Load();
+    }
+
+    public void Dispose() => Bus.Changed -= OnChanged;
+}

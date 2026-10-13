@@ -27,7 +27,7 @@ public class PoolAdminTests : IDisposable
     public PoolAdminTests()
     {
         pending = new PendingAgentResults(t.Clock);
-        svc = new PoolAdminService(t.Db, t.Commands, pending, t.Audit, t.Bus);
+        svc = new PoolAdminService(t.Db, t.Commands, pending, t.Audit, t.Bus, t.Clock);
         // A fake agent that behaves like the real one for the cases below.
         t.Hub.Client.OnPoolAction = (env, c) =>
         {
@@ -166,16 +166,158 @@ public class PoolAdminTests : IDisposable
     }
 
     [Fact]
-    public async Task In_production_stop_recycle_and_edit_need_an_explicit_confirmation_but_start_does_not()
+    public async Task In_production_stop_and_edit_cannot_be_done_directly_recycle_needs_confirmation_and_start_is_free()
     {
         await Setup("Prod");
         var op = Operator("Prod");
-        Assert.Contains("confirm", (await svc.ActAsync(op, serverId, ["ShopPool"], PoolActions.Stop, false)).Single().Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("second person", (await svc.ActAsync(op, serverId, ["ShopPool"], PoolActions.Stop, true)).Single().Message);          // even when "confirmed"
         Assert.Contains("confirm", (await svc.ActAsync(op, serverId, ["ShopPool"], PoolActions.Recycle, false)).Single().Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(t.Hub.Client.PoolActionsSent);
         Assert.True((await svc.ActAsync(op, serverId, ["ShopPool"], PoolActions.Start, false)).Single().Ok);
-        Assert.True((await svc.ActAsync(op, serverId, ["ShopPool"], PoolActions.Stop, true)).Single().Ok);
-        Assert.False((await svc.UpdateAsync(op, serverId, "ShopPool", new PoolConfig { QueueLength = 2000 }, new PoolConfig { QueueLength = 1000 }, confirmed: false)).Ok);
+        Assert.True((await svc.ActAsync(op, serverId, ["ShopPool"], PoolActions.Recycle, true)).Single().Ok);
+        var edit = await svc.UpdateAsync(op, serverId, "ShopPool", new PoolConfig { QueueLength = 2000 }, new PoolConfig { QueueLength = 1000 }, confirmed: true);
+        Assert.False(edit.Ok); Assert.Contains("second person", edit.Error);
+        Assert.Empty(t.Hub.Client.PoolUpdatesSent);
+    }
+
+    // ---------------- Production: a second person ----------------
+
+    private Actor Op2() => t.ActorWith(Role.ServerOperator, "Prod", "op2");
+
+    [Fact]
+    public async Task A_stop_request_needs_a_reason_waits_and_runs_only_when_a_different_operator_approves()
+    {
+        await Setup("Prod");
+        var op = Operator("Prod");
+        Assert.False((await svc.RequestStopAsync(op, serverId, ["ShopPool"], " ")).Ok);
+        var id = (await svc.RequestStopAsync(op, serverId, ["ShopPool", "OtherPool"], "decommission test pools")).Value;
+        Assert.Empty(t.Hub.Client.PoolActionsSent);                                           // nothing runs yet
+        Assert.Equal("Started", pools["ShopPool"].State);
+
+        var own = await svc.DecideAsync(op, id, true, null);
+        Assert.False(own.Ok); Assert.Contains("second person", own.Error);
+        Assert.Contains(await Audit(), a => a.Action == "Pool.Request.Approve" && a.Result == "Denied");
+        await Assert.ThrowsAsync<ForbiddenException>(() => svc.DecideAsync(t.ActorWith(Role.Auditor), id, true, null));
+        await Assert.ThrowsAsync<ForbiddenException>(() => svc.DecideAsync(t.ActorWith(Role.ServerOperator, "Dev", "dev-op"), id, true, null));
+
+        Assert.True((await svc.DecideAsync(Op2(), id, true, "ok")).Ok);
+        Assert.Equal(["Stopped", "Stopped"], [pools["ShopPool"].State, pools["OtherPool"].State]);
+        var a = await Audit();
+        Assert.Contains(a, x => x.Action == "Pool.Stop" && x.Detail!.Contains("Approved by User op2") && x.Detail.Contains("decommission"));
+        Assert.Contains(a, x => x.Action == "Pool.Request.Approve" && x.Result == "Success");
+        Assert.False((await svc.DecideAsync(Op2(), id, true, null)).Ok);                      // already done
+        var row = (await svc.RequestsAsync(Op2())).Single();
+        Assert.Equal(PoolRequestStatus.Executed, row.Request.Status);
+    }
+
+    [Fact]
+    public async Task An_edit_request_runs_the_stored_change_with_its_stale_check_and_a_stale_edit_is_reported_as_failed()
+    {
+        await Setup("Prod");
+        var id = (await svc.RequestEditAsync(Operator("Prod"), serverId, "ShopPool", new PoolConfig { QueueLength = 2000 }, new PoolConfig { QueueLength = 1000 }, "traffic growth")).Value;
+        pools["ShopPool"] = ("Started", Default() with { QueueLength = 5000 });               // changed while waiting for approval
+        var r = await svc.DecideAsync(Op2(), id, true, null);
+        Assert.False(r.Ok); Assert.Contains("someone else", r.Error);
+        Assert.Equal(5000, pools["ShopPool"].Config.QueueLength);
+        Assert.Equal(PoolRequestStatus.Failed, (await svc.RequestsAsync(Op2())).Single().Request.Status);
+
+        var id2 = (await svc.RequestEditAsync(Operator("Prod"), serverId, "ShopPool", new PoolConfig { QueueLength = 2000 }, new PoolConfig { QueueLength = 5000 }, "again")).Value;
+        Assert.True((await svc.DecideAsync(Op2(), id2, true, null)).Ok);
+        Assert.Equal(2000, pools["ShopPool"].Config.QueueLength);
+    }
+
+    [Fact]
+    public async Task Reject_needs_a_reason_cancel_is_for_the_requester_and_old_requests_expire()
+    {
+        await Setup("Prod");
+        var op = Operator("Prod");
+        var id = (await svc.RequestStopAsync(op, serverId, ["ShopPool"], "x")).Value;
+        Assert.False((await svc.DecideAsync(Op2(), id, false, " ")).Ok);
+        Assert.True((await svc.DecideAsync(Op2(), id, false, "not now")).Ok);
+        Assert.Equal(PoolRequestStatus.Rejected, (await svc.RequestsAsync(op)).Single().Request.Status);
+
+        var id2 = (await svc.RequestStopAsync(op, serverId, ["ShopPool"], "y")).Value;
+        await Assert.ThrowsAsync<ForbiddenException>(() => svc.CancelRequestAsync(Op2(), id2));
+        Assert.True((await svc.CancelRequestAsync(op, id2)).Ok);
+
+        var id3 = (await svc.RequestStopAsync(op, serverId, ["ShopPool"], "z")).Value;
+        t.Clock.Advance(TimeSpan.FromHours(25));
+        Assert.Contains("Expired", (await svc.DecideAsync(Op2(), id3, true, null)).Error);
+        Assert.Empty(t.Hub.Client.PoolActionsSent);
+    }
+
+    [Fact]
+    public async Task Requests_only_exist_for_production_and_pending_ones_are_counted_for_the_other_operator()
+    {
+        await Setup("Dev");
+        Assert.Contains("Only Production", (await svc.RequestStopAsync(Operator(), serverId, ["ShopPool"], "x")).Error);
+        var s2 = await t.ApprovedServer("PROD01", "Prod");
+        Assert.NotEqual(serverId, s2);
+    }
+
+    // ---------------- project Deployers recycle their own pool ----------------
+
+    private async Task<(Actor deployer, Guid target)> DeployerWorld(string env = "Dev")
+    {
+        await Setup(env);
+        await using var db = t.Db.CreateDbContext();
+        var comp = await db.Components.FirstAsync();
+        var target = (await db.DeploymentTargets.FirstAsync()).Id;
+        var user = new UserContext("dep", "Dep", []);
+        var assign = new RoleAssignment { Id = Guid.NewGuid(), PrincipalType = PrincipalType.User, PrincipalId = "dep", Scope = RoleScope.Project, ProjectId = comp.ProjectId, Role = Role.Deployer, EnvironmentName = env };
+        return (new Actor("dep", "Dep", null, new AccessEvaluator(user, [assign], t.Clock.GetUtcNow())), target);
+    }
+
+    [Fact]
+    public async Task A_deployer_can_recycle_the_pool_of_their_own_target_only_and_it_is_audited()
+    {
+        var (dep, target) = await DeployerWorld();
+        var r = await svc.RecycleForTargetAsync(dep, target, confirmed: false);
+        Assert.True(r.Ok, r.Message);
+        Assert.Equal([PoolActions.Recycle], t.Hub.Client.PoolActionsSent.Select(x => x.Command.Action));
+        Assert.Equal("ShopPool", t.Hub.Client.PoolActionsSent.Single().Command.Pool);
+        Assert.Contains(await Audit(), a => a.Action == "Pool.Recycle" && a.Result == "Success" && a.Detail!.Contains("Deployer"));
+    }
+
+    [Fact]
+    public async Task A_deployer_of_another_environment_a_viewer_and_a_stranger_cannot_recycle()
+    {
+        var (_, target) = await DeployerWorld();
+        var comp = await t.Db.CreateDbContext().Components.FirstAsync();
+        Actor Person(Role role, string env, Guid? project = null)
+        {
+            var a = new RoleAssignment { Id = Guid.NewGuid(), PrincipalType = PrincipalType.User, PrincipalId = "x", Scope = RoleScope.Project, ProjectId = project ?? comp.ProjectId, Role = role, EnvironmentName = env };
+            return new Actor("x", "X", null, new AccessEvaluator(new UserContext("x", "X", []), [a], t.Clock.GetUtcNow()));
+        }
+        await Assert.ThrowsAsync<ForbiddenException>(() => svc.RecycleForTargetAsync(Person(Role.Deployer, "Prod"), target, true));
+        await Assert.ThrowsAsync<ForbiddenException>(() => svc.RecycleForTargetAsync(Person(Role.ProjectViewer, "Dev"), target, true));
+        await Assert.ThrowsAsync<ForbiddenException>(() => svc.RecycleForTargetAsync(Person(Role.Deployer, "Dev", Guid.NewGuid()), target, true));
+        await Assert.ThrowsAsync<ForbiddenException>(() => svc.RecycleForTargetAsync(t.Nobody, target, true));
+        Assert.Empty(t.Hub.Client.PoolActionsSent);
+    }
+
+    [Fact]
+    public async Task A_deployer_cannot_recycle_a_pool_that_also_serves_other_applications_or_when_the_server_is_read_only()
+    {
+        var (dep, target) = await DeployerWorld();
+        await t.Store(serverId, new SiteSpec(1, "shop", @"D:\Websites\shop", "ShopPool"), new SiteSpec(2, "other", @"D:\Websites\other", "ShopPool"));     // OtherPool is now also ShopPool
+        var shared = await svc.RecycleForTargetAsync(dep, target, false);
+        Assert.False(shared.Ok); Assert.Contains("also serves", shared.Message);
+        Assert.Empty(t.Hub.Client.PoolActionsSent);
+
+        var (dep2, target2) = (dep, target);
+        await t.Store(serverId, new SiteSpec(1, "shop", @"D:\Websites\shop", "ShopPool"), new SiteSpec(2, "other", @"D:\Websites\other", "OtherPool"));
+        await using (var db = t.Db.CreateDbContext()) { (await db.Servers.FirstAsync(s => s.Id == serverId)).Mode = ServerMode.ReadOnly; await db.SaveChangesAsync(); }
+        var ro = await svc.RecycleForTargetAsync(dep2, target2, false);
+        Assert.False(ro.Ok); Assert.Contains("ReadOnly", ro.Message);
+    }
+
+    [Fact]
+    public async Task In_production_a_deployer_recycle_needs_the_confirmation()
+    {
+        var (dep, target) = await DeployerWorld("Prod");
+        Assert.Contains("confirm", (await svc.RecycleForTargetAsync(dep, target, false)).Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True((await svc.RecycleForTargetAsync(dep, target, true)).Ok);
     }
 
     [Fact]

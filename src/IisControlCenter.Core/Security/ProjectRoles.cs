@@ -10,6 +10,7 @@ public enum ProjectPermission
     ApproveDeployment,   // Phase 3
     ManageMembers,       // grant roles up to Deployer
     RequestLink,         // ask for a component link
+    RecyclePool,         // recycle the app pool of a target of this project (Phase 4a)
 }
 
 public static class ProjectRolePermissions
@@ -17,7 +18,7 @@ public static class ProjectRolePermissions
     private static readonly Dictionary<Role, ProjectPermission[]> Map = new()
     {
         [Role.ProjectViewer] = [ProjectPermission.View],
-        [Role.Deployer] = [ProjectPermission.View, ProjectPermission.SubmitDeployment],
+        [Role.Deployer] = [ProjectPermission.View, ProjectPermission.SubmitDeployment, ProjectPermission.RecyclePool],
         [Role.Approver] = [ProjectPermission.View, ProjectPermission.ApproveDeployment],
         [Role.ProjectOwner] = [ProjectPermission.View, ProjectPermission.ManageMembers, ProjectPermission.RequestLink],
     };

@@ -6,6 +6,7 @@
     <AuthorizeView Policy="@Policies.For(Permission.ViewServers)">
         <MudNavLink Href="/servers" Icon="@Icons.Material.Filled.Dns">Servers</MudNavLink>
         <MudNavLink Href="/drift" Icon="@Icons.Material.Filled.CompareArrows">Drift</MudNavLink>
+        <MudNavLink Href="/pools/requests" Icon="@Icons.Material.Filled.HowToReg">Pool approvals</MudNavLink>
     </AuthorizeView>
     <AuthorizeView Policy="@Policies.For(Permission.ViewDiscoveryReport)">
         <MudNavLink Href="/reports/discovery" Icon="@Icons.Material.Filled.FactCheck">Discovery report</MudNavLink>

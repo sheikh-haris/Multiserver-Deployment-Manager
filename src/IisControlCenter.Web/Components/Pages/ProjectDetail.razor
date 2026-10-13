@@ -6,6 +6,7 @@
 @inject MembershipService Members
 @inject TargetService Targets
 @inject DeploymentService DeploymentsSvc
+@inject PoolAdminService PoolAdmin
 @inject ProtectedListService ProtectedLists
 @inject ServerEventBus Bus
 @inject IDialogService Dialogs
@@ -92,6 +93,10 @@ else if (_view is not null)
                                         @if (!string.IsNullOrEmpty(t.StatusDetail)) { <MudText Typo="Typo.caption" Class="d-block" Style="max-width:260px">@t.StatusDetail</MudText> }
                                     </td>
                                     <td>
+                                        @if (t.Status == TargetStatus.Active && _actor!.Access.CanOnProject(ProjectPermission.RecyclePool, Id, t.EnvironmentName))
+                                        {
+                                            <MudTooltip Text="Recycle the app pool of this application (briefly restarts it)"><MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Autorenew" OnClick="() => Recycle(t)">Recycle pool</MudButton></MudTooltip>
+                                        }
                                         @if (_view.CanManage)
                                         {
                                             <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small">
@@ -282,6 +287,25 @@ else { <MudProgressLinear Indeterminate="true" /> }
     {
         if (!await Confirm("Remove component", $"Remove the component and its protected path list? It must have no targets.", c.Name, "Remove")) return;
         await Run(() => Projects.RemoveComponentAsync(_actor!, c.Id), "Component removed.");
+    }
+
+    private async Task Recycle(TargetView t)
+    {
+        var confirmed = t.EnvironmentName != "Prod";
+        var verb = $"Recycle app pool '{t.AppPoolName}' on {t.ServerName}? The application restarts; requests in progress may fail briefly.";
+        if (t.EnvironmentName == "Prod")
+        {
+            var dlg = await Dialogs.ShowAsync<ConfirmDangerDialog>("PRODUCTION: recycle pool", new DialogParameters<ConfirmDangerDialog> { { x => x.Message, verb }, { x => x.ConfirmText, "PROD" }, { x => x.ButtonText, "Recycle" } });
+            confirmed = (await dlg.Result) is { Canceled: false };
+        }
+        else confirmed = await Dialogs.ShowMessageBoxAsync("Recycle pool?", verb, yesText: "Recycle", cancelText: "Cancel") == true;
+        if (!confirmed) return;
+        try
+        {
+            var r = await PoolAdmin.RecycleForTargetAsync(_actor!, t.Id, true);
+            Snackbar.Add(r.Ok ? $"Recycled {t.AppPoolName}. {r.Message}" : r.Message, r.Ok ? Severity.Success : Severity.Error);
+        }
+        catch (ForbiddenException ex) { Snackbar.Add(ex.Message, Severity.Error); }
     }
 
     private Task Move(TargetView t, bool up) => Run(() => Targets.MoveAsync(_actor!, t.Id, up), "Order changed.");

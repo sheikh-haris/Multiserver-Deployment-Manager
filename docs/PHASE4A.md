@@ -36,15 +36,30 @@ Server page → **Manage app pools** (also reachable at `/servers/<id>/pools`).
 
 | Area | How |
 |---|---|
-| Pool rules (ranges, identities, times, conflicts, "effective" changes) | 29 new Core tests |
+| Pool rules (ranges, identities, times, conflicts, "effective" changes) and the Deployer permission | 30 new Core tests |
 | Agent handler (ReadOnly gate, envelope checks, stale edit, dangerous identity, idempotence) + nested-folder deployment and rollback | 10 new agent tests |
-| Portal service (roles, ReadOnly, offline, Prod confirmation, several pools, failures, audit before/after, no drift, wrong-server answers) | 12 new web tests |
+| Portal service (roles, ReadOnly, offline, Prod approval flow incl. own-request refusal, stale edit, reject, cancel, expiry; Deployer recycle incl. shared pool, wrong role, Prod confirm; several pools, failures, audit, no drift, wrong-server answers) | 20 new web tests |
 | Real browser, real portal, real agent (sample pools) | `tests/Smoke/run.sh`: ReadOnly explains itself and disables buttons; switch to Managed; stop, start, recycle, edit, reopen shows the saved value |
 | Real IIS | New integration tests (read without passwords, round trip of every setting, custom account and password survive an edit, stop/start/recycle, handler rules). Run by CI on Windows; see the result in the notes below. |
 
+## Two additions you asked for
+
+**1. Production needs a second person for Stop and Edit.**
+- In Production a Server Operator or Platform Admin cannot stop pools or change their settings directly. They write a reason and send a **request** (Pool approvals page).
+- A *different* Server Operator (for Production) or Platform Admin approves or rejects. Approving **runs it immediately**, with the same stale-value check as a direct edit. Rejecting needs a reason.
+- You cannot approve your own request. There is no self-approval switch for this. Requests expire after 24 hours. The requester (or a Platform Admin) can cancel.
+- Everything is audited: the request, the decision, and the pool change itself (its audit line says who approved and who asked, and why).
+- **Consequence you must plan for:** Production stops and edits need two people with that access. With a single administrator, they cannot be done.
+- Recycle in Production stays direct (typed `PROD` confirmation), Start is always direct.
+
+**2. Project Deployers can recycle their own pool.**
+- Button **Recycle pool** on the project page, per target, for people with the Deployer role for that project and environment. Recycle only: never stop, never edit.
+- Refused when the pool also serves anything else (another site or application, or another component's target), because that would restart other people's applications. The message tells them to ask a Server Operator.
+- Needs the same conditions as every pool action (server Managed, agent online, target Active). In Production they type `PROD`. Audited with the project-role path noted.
+
 ## Decisions I made that you should check
 
-1. **No approval workflow for pool actions.** One operator acts, with a typed confirmation in Production, and everything is audited. If you want a second person for Production stops or edits, say so; it reuses the approval machinery from Phase 3.
-2. **Project Deployers cannot recycle their own pool.** Only Server Operators and Platform Admins. Many teams want developers to recycle their own app; it is a small change (new project permission) if you want it.
-3. **Pool names must come from the last discovery.** Creating or deleting pools comes with the rest of Phase 4.
-4. **Stopping a pool that production sites use is allowed** (with a warning and confirmation). There is no "protected pool" list yet.
+1. **A Deployer cannot recycle without the server being Managed.** Same gate as everything else.
+2. **Pool names must come from the last discovery.** Creating or deleting pools comes with the rest of Phase 4.
+3. **Stopping a pool that production sites use is allowed** (with a warning and approval). There is no "protected pool" list yet.
+4. **Approvers for pool requests are Server Operators or Platform Admins**, not project Approvers: pools belong to the server, not to a project.

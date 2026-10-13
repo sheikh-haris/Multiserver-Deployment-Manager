@@ -144,8 +144,18 @@ await row.getByRole('button', { name: 'Edit' }).click();
 must(await op.getByLabel('Queue length').inputValue() === '2500', 'the edited value is shown when the pool is opened again');
 await op.getByRole('button', { name: 'Cancel' }).click();
 
+// a project Deployer can recycle the pool of their own application, from the project page
+await dep.goto(`${PORTAL}/projects/${PID}`); await dep.waitForLoadState('networkidle');
+await dep.getByRole('button', { name: /Recycle pool/ }).click();
+await dep.locator('.mud-dialog-container').getByRole('button', { name: /^recycle$/i }).click();
+await dep.getByText(/Recycled ShopPool/).waitFor({ timeout: 30000 });
+must(true, 'a Deployer can recycle their own pool from the project page');
+await shot(dep, '11-deployer-recycle');
+await appr.goto(`${PORTAL}/projects/${PID}`); await appr.waitForLoadState('networkidle');
+must(await appr.getByRole('button', { name: /Recycle pool/ }).count() === 0, 'an Approver (no Deployer role) has no Recycle button');
+
 // ---------- 7. pages that must load ----------
-for (const p of ['/deployments', '/', `/projects/${PID}`, '/reports/deployments']) {
+for (const p of ['/deployments', '/', `/projects/${PID}`, '/reports/deployments', '/pools/requests', `/servers/${SID}/pools`]) {
   await page0.goto(`${PORTAL}${p}`); await page0.waitForLoadState('networkidle'); await shot(page0, 'page' + p.replace(/\W+/g, '-'));
 }
 await browser.close();
