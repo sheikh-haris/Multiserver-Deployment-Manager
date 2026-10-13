@@ -6,8 +6,15 @@ namespace IisControlCenter.Agent.Iis;
 /// Fake data for trying the portal on a non-Windows development machine.
 /// The agent refuses to use it on Windows, so it can never hide a real server.
 /// </summary>
-public sealed class SampleInspector(SamplePoolAdmin pools) : IIisInspector
+public sealed class SampleInspector(SamplePoolAdmin pools, IIisAdmin? admin = null) : IIisInspector
 {
+    /// <summary>Sites created through the portal in this development session, so the next discovery shows them.</summary>
+    private List<DiscoveredSite> Created() => (admin?.Sites() ?? []).Select(s => new DiscoveredSite(s.Id, s.Name, s.State, s.Apps.FirstOrDefault(a => a.Path == "/")?.PhysicalPath, s.Apps.FirstOrDefault(a => a.Path == "/")?.PoolName,
+        s.HttpBindings.Select(b => new DiscoveredBinding("http", "*", b.Port, b.Host, null)).ToList(),
+        s.Apps.Select(a => new DiscoveredApplication(a.Path, a.PhysicalPath, a.PoolName, a.VirtualDirs.Select(v => new DiscoveredVirtualDirectory(v.Path, v.PhysicalPath)).ToList())).ToList())).ToList();
+
+    private List<DiscoveredAppPool> ExtraPools(IEnumerable<string> already) => pools.Names.Except(already, StringComparer.OrdinalIgnoreCase).Select(Pool).ToList();
+
     private DiscoveredAppPool Pool(string name)
     {
         pools.Ensure(name);
@@ -24,8 +31,8 @@ public sealed class SampleInspector(SamplePoolAdmin pools) : IIisInspector
             return new DiscoveryResult(commandId, now, true,
                 configured.Select(c => new DiscoveredSite(c.Id, c.Name, "Started", c.Path, c.Pool,
                     [new DiscoveredBinding("http", "*", c.Port, c.Host, null)],
-                    [new DiscoveredApplication("/", c.Path, c.Pool, [new DiscoveredVirtualDirectory("/", c.Path)])])).ToList(),
-                configured.Select(c => c.Pool).Distinct().Select(Pool).ToList(),
+                    [new DiscoveredApplication("/", c.Path, c.Pool, [new DiscoveredVirtualDirectory("/", c.Path)])])).Concat(Created()).ToList(),
+                configured.Select(c => c.Pool).Distinct().Select(Pool).Concat(ExtraPools(configured.Select(c => c.Pool))).ToList(),
                 [], [new DiscoveredDotNetVersion(".NET Framework", "4.8")]);
         DiscoveredSite Site(long id, string name, string path, string pool, string host) => new(id, name, "Started", path, pool,
             [new DiscoveredBinding("http", "*", 80, host, null), new DiscoveredBinding("https", "*", 443, host, "AABBCCDDEEFF00112233445566778899AABBCCDD")],

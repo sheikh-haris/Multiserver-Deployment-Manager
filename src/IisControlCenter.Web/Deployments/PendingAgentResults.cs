@@ -68,7 +68,24 @@ public sealed class PendingAgentResults(TimeProvider clock)
         return e.Tcs.TrySetResult(r);
     }
 
-    public void Forget(Guid commandId) { _manifests.TryRemove(commandId, out _); _masked.TryRemove(commandId, out _); _pools.TryRemove(commandId, out _); }
+    private readonly ConcurrentDictionary<Guid, Entry<IisOpResult>> _iis = new();
+
+    public Task<IisOpResult> ExpectIis(Guid commandId, Guid serverId)
+    {
+        Sweep();
+        var e = new Entry<IisOpResult>(serverId, new(TaskCreationOptions.RunContinuationsAsynchronously), clock.GetUtcNow().AddMinutes(10), null);
+        _iis[commandId] = e;
+        return e.Tcs.Task;
+    }
+
+    public bool CompleteIis(Guid serverId, IisOpResult r)
+    {
+        if (!_iis.TryGetValue(r.CommandId, out var e) || e.ServerId != serverId) return false;
+        _iis.TryRemove(r.CommandId, out _);
+        return e.Tcs.TrySetResult(r);
+    }
+
+    public void Forget(Guid commandId) { _manifests.TryRemove(commandId, out _); _masked.TryRemove(commandId, out _); _pools.TryRemove(commandId, out _); _iis.TryRemove(commandId, out _); }
 
     private void Sweep()
     {
@@ -76,5 +93,6 @@ public sealed class PendingAgentResults(TimeProvider clock)
         foreach (var kv in _manifests.Where(k => k.Value.Expires < now).ToList()) { if (_manifests.TryRemove(kv.Key, out var e)) e.Tcs.TrySetCanceled(); }
         foreach (var kv in _masked.Where(k => k.Value.Expires < now).ToList()) { if (_masked.TryRemove(kv.Key, out var e)) e.Tcs.TrySetCanceled(); }
         foreach (var kv in _pools.Where(k => k.Value.Expires < now).ToList()) { if (_pools.TryRemove(kv.Key, out var e)) e.Tcs.TrySetCanceled(); }
+        foreach (var kv in _iis.Where(k => k.Value.Expires < now).ToList()) { if (_iis.TryRemove(kv.Key, out var e)) e.Tcs.TrySetCanceled(); }
     }
 }

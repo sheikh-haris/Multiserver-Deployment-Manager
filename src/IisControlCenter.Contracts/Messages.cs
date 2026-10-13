@@ -3,8 +3,8 @@ namespace IisControlCenter.Contracts;
 /// <summary>Bump when a breaking change is made to any message below.</summary>
 public static class ContractInfo
 {
-    public const int Version = 3;
-    public const int MinimumAgentVersion = 3;   // v2: deployment commands. v3: app pool commands and pool settings in discovery
+    public const int Version = 4;
+    public const int MinimumAgentVersion = 4;   // v2: deployment commands. v3: app pool commands and pool settings in discovery. v4: IIS management commands
 
     public static class Routes
     {
@@ -60,6 +60,7 @@ public interface IAgentClient
     Task RollbackRun(CommandEnvelope envelope, RollbackCommand command);
     Task PoolAction(CommandEnvelope envelope, PoolActionCommand command);
     Task UpdatePool(CommandEnvelope envelope, UpdatePoolCommand command);
+    Task IisOperation(CommandEnvelope envelope, IisOpCommand command);
     /// <summary>Tells the agent its certificate was revoked or the server removed. Agent stops reconnecting.</summary>
     Task Disconnect(string reason);
 }

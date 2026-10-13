@@ -38,6 +38,9 @@ public sealed class RecordingAgentClient : IAgentClient
     public Func<CommandEnvelope, UpdatePoolCommand, Task>? OnUpdatePool { get; set; }
     public Task PoolAction(CommandEnvelope e, PoolActionCommand c) { PoolActionsSent.Add((e, c)); return OnPoolAction?.Invoke(e, c) ?? Task.CompletedTask; }
     public Task UpdatePool(CommandEnvelope e, UpdatePoolCommand c) { PoolUpdatesSent.Add((e, c)); return OnUpdatePool?.Invoke(e, c) ?? Task.CompletedTask; }
+    public List<(CommandEnvelope Env, IisOpCommand Command)> IisOpsSent { get; } = [];
+    public Func<CommandEnvelope, IisOpCommand, Task>? OnIisOp { get; set; }
+    public Task IisOperation(CommandEnvelope e, IisOpCommand c) { IisOpsSent.Add((e, c)); return OnIisOp?.Invoke(e, c) ?? Task.CompletedTask; }
     public Task Disconnect(string reason) { Disconnects.Add(reason); return Task.CompletedTask; }
 }
 

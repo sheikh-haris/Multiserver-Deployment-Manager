@@ -27,7 +27,8 @@ public sealed class PoolAdminService(
     PendingAgentResults pending,
     AuditService audit,
     ServerEventBus bus,
-    TimeProvider clock)
+    TimeProvider clock,
+    IisOpsService iisOps)
 {
     public const int MaxPoolsPerCall = 50;
     private static readonly SemaphoreSlim DecideGate = new(1, 1);
@@ -241,7 +242,7 @@ public sealed class PoolAdminService(
             var isOp = actor.Can(Permission.ManageIis, r.EnvironmentName);
             string? why = r.Status != PoolRequestStatus.Pending ? null : !isOp ? "You need the Server Operator role for Production, or Platform Admin." : mine ? "You requested this. A second person has to approve it." : null;
             rows.Add(new PoolRequestRow(r, names.GetValueOrDefault(r.ServerId, "?"), JsonSerializer.Deserialize<List<string>>(r.PoolsJson) ?? [],
-                r.ChangeJson is null ? null : Summarize(JsonSerializer.Deserialize<PoolConfig>(r.ChangeJson)!),
+                r.Summary ?? (r.ChangeJson is null ? null : Summarize(JsonSerializer.Deserialize<PoolConfig>(r.ChangeJson)!)),
                 r.Status == PoolRequestStatus.Pending && why is null, r.Status == PoolRequestStatus.Pending && (mine || actor.Can(Permission.ManageServers)), why));
         }
         return rows;
@@ -288,7 +289,12 @@ public sealed class PoolAdminService(
             var note = $"Approved by {actor.UserName}; requested by {r.RequestedBy}: {r.Reason}";
             string message; bool ok;
             var pools = JsonSerializer.Deserialize<List<string>>(r.PoolsJson) ?? [];
-            if (r.Kind == PoolRequestKind.Stop)
+            if (r.Kind == PoolRequestKind.Iis)
+            {
+                var o = await iisOps.ExecuteApprovedAsync(db, actor, server, r, ct);
+                ok = o.Ok; message = o.Ok ? (o.Result?.After ?? "Done.") : o.Error ?? "Failed.";
+            }
+            else if (r.Kind == PoolRequestKind.Stop)
             {
                 var res = await ExecuteActionAsync(db, actor, server, pools, PoolActions.Stop, note, ct);
                 ok = res.All(x => x.Ok); message = string.Join("; ", res.Select(x => $"{x.Pool}: {x.Message}"));

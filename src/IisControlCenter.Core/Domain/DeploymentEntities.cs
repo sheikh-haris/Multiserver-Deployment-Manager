@@ -187,7 +187,7 @@ public class ProtectedListConfirmation
     public string ListHash { get; set; } = "";
 }
 
-public enum PoolRequestKind { Stop, Edit }
+public enum PoolRequestKind { Stop, Edit, Iis }
 
 public enum PoolRequestStatus { Pending, Executed, Failed, Rejected, Cancelled, Expired }
 
@@ -217,4 +217,31 @@ public class PoolChangeRequest
     public DateTimeOffset? DecidedAt { get; set; }
     public string? DecisionComment { get; set; }
     public string? ResultMessage { get; set; }
+    /// <summary>Kind = Iis: the whole <c>IisOpCommand</c> as JSON, exactly what will run when a second person approves.</summary>
+    public string? PayloadJson { get; set; }
+    /// <summary>Short text for the approval screen, for example "Create site shop (shop.example.local:80)".</summary>
+    public string? Summary { get; set; }
+    /// <summary>Project the person acted for (project Owners only). Used for the ownership ledger.</summary>
+    public Guid? ProjectId { get; set; }
+}
+
+public enum IisItemKind { Pool, Site, App, VDir, Folder }
+
+/// <summary>
+/// What was created through the portal, and for which project. Project Owners may only touch their own items.
+/// There is no delete in the portal, so rows are never removed.
+/// </summary>
+public class IisCreatedItem
+{
+    public Guid Id { get; set; }
+    public Guid ServerId { get; set; }
+    public IisItemKind Kind { get; set; }
+    /// <summary>Pool name, IIS site id, "siteId:/app/path", "siteId:/vdir/path" or the folder path.</summary>
+    public string Key { get; set; } = "";
+    /// <summary>Folder on the server (sites, applications, virtual directories, folders). Null for pools.</summary>
+    public string? Path { get; set; }
+    public Guid? ProjectId { get; set; }
+    public string CreatedBy { get; set; } = "";
+    public string CreatedById { get; set; } = "";
+    public DateTimeOffset CreatedAt { get; set; }
 }

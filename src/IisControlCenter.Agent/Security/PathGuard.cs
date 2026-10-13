@@ -71,4 +71,14 @@ public static class PathGuard
         }
         return false;
     }
+
+    /// <summary>True when <paramref name="path"/> is BELOW a root (not the root itself). Used for creating things: never the root.</summary>
+    public static bool IsStrictlyUnderAnyRoot(string? path, IEnumerable<string> roots)
+    {
+        var n = Normalize(path);
+        if (n is null || !IsUnderAnyRoot(path, roots)) return false;
+        foreach (var r in roots)
+            if (Normalize(r) is { } root && n == root) return false;
+        return true;
+    }
 }

@@ -24,7 +24,7 @@ else
             <tr>
                 <td><StatusChip Status="@(row.Request.Status == PoolRequestStatus.Executed ? "Succeeded" : row.Request.Status.ToString())" Text="@row.Request.Status.ToString()" /></td>
                 <td>@row.ServerName <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined">@row.Request.EnvironmentName</MudChip></td>
-                <td><b>@(row.Request.Kind == PoolRequestKind.Stop ? "STOP" : "EDIT")</b> @string.Join(", ", row.Pools)
+                <td><b>@(row.Request.Kind == PoolRequestKind.Stop ? "STOP" : row.Request.Kind == PoolRequestKind.Iis ? "IIS" : "EDIT")</b> @string.Join(", ", row.Pools)
                     @if (row.ChangeSummary is not null) { <div class="mono" style="font-size:12px">@row.ChangeSummary</div> }
                     @if (row.Request.ResultMessage is not null) { <div style="font-size:12px">Result: @row.Request.ResultMessage</div> }</td>
                 <td style="max-width:260px">@row.Request.Reason @if (row.Request.DecisionComment is not null) { <div><i>@row.Request.DecidedBy: @row.Request.DecisionComment</i></div> }</td>

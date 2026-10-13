@@ -111,6 +111,7 @@ builder.Services.AddScoped<DiscoveryJob>();
 builder.Services.AddScoped<ReconciliationJob>();
 builder.Services.AddScoped<Reconciler>();
 builder.Services.AddScoped<ProjectService>();
+builder.Services.AddScoped<IisOpsService>();
 builder.Services.AddScoped<PoolAdminService>();
 builder.Services.AddScoped<MembershipService>();
 builder.Services.AddScoped<TargetService>();

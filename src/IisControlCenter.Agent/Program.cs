@@ -33,14 +33,17 @@ if (OperatingSystem.IsWindows())
 {
     builder.Services.AddSingleton<IIisInspector, IisInspector>();
     builder.Services.AddSingleton<IPoolAdmin, IisPoolAdmin>();
+    builder.Services.AddSingleton<IIisAdmin, IisAdmin>();
 }
 else
 {
     builder.Services.AddSingleton<SamplePoolAdmin>();
     builder.Services.AddSingleton<IPoolAdmin>(sp => sp.GetRequiredService<SamplePoolAdmin>());
-    builder.Services.AddSingleton<IIisInspector, SampleInspector>();
+    builder.Services.AddSingleton<IIisAdmin, SampleIisAdmin>();
+    builder.Services.AddSingleton<IIisInspector>(sp => new SampleInspector(sp.GetRequiredService<SamplePoolAdmin>(), sp.GetRequiredService<IIisAdmin>()));
 }
 builder.Services.AddSingleton<IisControlCenter.Agent.Pools.PoolHandler>();
+builder.Services.AddSingleton<IisControlCenter.Agent.Pools.IisOpHandler>();
 
 // ---- deployment services ----
 var dataDir = config.SourcePath is null ? AgentConfig.DefaultDirectory : Path.GetDirectoryName(config.SourcePath)!;

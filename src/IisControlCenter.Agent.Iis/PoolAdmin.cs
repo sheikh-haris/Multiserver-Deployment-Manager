@@ -120,6 +120,16 @@ public sealed class SamplePoolAdmin : IPoolAdmin
         _pools["PaymentsPool"] = ("Started", _pools["DefaultAppPool"].Config with { IdentityType = "LocalSystem", ManagedRuntimeVersion = "" });
     }
 
+    public void Create(string name, PoolConfig? config)
+    {
+        lock (_gate)
+        {
+            if (_pools.ContainsKey(name)) throw new InvalidOperationException("The pool already exists.");
+            _pools[name] = ("Started", _pools["DefaultAppPool"].Config);
+        }
+        if (config is { IsEmpty: false }) Apply(name, config);
+    }
+
     public void Ensure(string name)
     {
         lock (_gate) if (!_pools.ContainsKey(name)) _pools[name] = _pools["DefaultAppPool"];

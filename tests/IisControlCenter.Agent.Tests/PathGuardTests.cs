@@ -2,6 +2,7 @@ using IisControlCenter.Agent.Security;
 
 namespace IisControlCenter.Agent.Tests;
 
+[Collection("PosixPathMode")]
 public class PathGuardTests
 {
     private static readonly string[] Roots = [@"D:\Websites"];

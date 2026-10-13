@@ -96,6 +96,12 @@ public sealed class AgentCommandService(
         await hub.Clients.Client(c).UpdatePool(env, cmd); return OpResult.Success();
     }
 
+    public async Task<OpResult> SendIisOpAsync(Server s, CommandEnvelope env, IisOpCommand cmd)
+    {
+        var c = Connection(s); if (c is null) return OpResult.Fail($"The agent on {s.Name} is offline.");
+        await hub.Clients.Client(c).IisOperation(env, cmd); return OpResult.Success();
+    }
+
     public bool IsConnected(Guid serverId) => tracker.IsConnected(serverId);
 
     /// <summary>True once per issued command id for that server.</summary>

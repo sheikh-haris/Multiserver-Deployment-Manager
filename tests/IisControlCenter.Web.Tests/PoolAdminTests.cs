@@ -27,7 +27,7 @@ public class PoolAdminTests : IDisposable
     public PoolAdminTests()
     {
         pending = new PendingAgentResults(t.Clock);
-        svc = new PoolAdminService(t.Db, t.Commands, pending, t.Audit, t.Bus, t.Clock);
+        svc = new PoolAdminService(t.Db, t.Commands, pending, t.Audit, t.Bus, t.Clock, new IisOpsService(t.Db, t.Commands, pending, t.Audit, t.Bus, t.Clock));
         // A fake agent that behaves like the real one for the cases below.
         t.Hub.Client.OnPoolAction = (env, c) =>
         {

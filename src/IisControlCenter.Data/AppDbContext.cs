@@ -41,6 +41,7 @@ public class AppDbContext : DbContext
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<ProtectedListConfirmation> ProtectedListConfirmations => Set<ProtectedListConfirmation>();
     public DbSet<PoolChangeRequest> PoolChangeRequests => Set<PoolChangeRequest>();
+    public DbSet<IisCreatedItem> IisCreatedItems => Set<IisCreatedItem>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -423,7 +424,19 @@ public class AppDbContext : DbContext
             e.Property(x => x.DecidedById).HasMaxLength(200);
             e.Property(x => x.DecisionComment).HasMaxLength(1000);
             e.Property(x => x.ResultMessage).HasMaxLength(2000);
+            e.Property(x => x.Summary).HasMaxLength(500);
             e.HasIndex(x => new { x.Status, x.ServerId });
+        });
+        b.Entity<IisCreatedItem>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(20);
+            e.Property(x => x.Key).HasMaxLength(1100);
+            e.Property(x => x.Path).HasMaxLength(1000);
+            e.Property(x => x.CreatedBy).HasMaxLength(300);
+            e.Property(x => x.CreatedById).HasMaxLength(200);
+            e.HasIndex(x => new { x.ServerId, x.Kind });
+            e.HasIndex(x => x.ProjectId);
         });
         b.Entity<Notification>(e =>
         {
